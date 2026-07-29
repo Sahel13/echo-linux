@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "instructions": "Entries are immutable except for changing passes from false to true after all acceptance steps have been verified.",
+  "features": [
+    {
+      "id": "INIT-001",
+      "category": "foundation",
+      "description": "The new repository has a minimal Rust GTK4/libadwaita application and durable agent harness.",
+      "depends_on": [],
+      "acceptance_steps": [
+        "From a clean checkout, run scripts/bootstrap.sh successfully.",
+        "Run scripts/check.sh successfully.",
+        "Run scripts/dev.sh in an X11 session and verify one compact Echo window opens.",
+        "Verify AGENTS.md, feature-list.json, and progress.md are sufficient to select the next task."
+      ],
+      "passes": true
+    },
+    {
+      "id": "APP-001",
+      "category": "application",
+      "description": "Echo is single-instance, reactivation presents the existing settings window, closing hides it, and Quit exits.",
+      "depends_on": ["INIT-001"],
+      "acceptance_steps": [
+        "Launch Echo twice and verify there is one process and one presented settings window.",
+        "Close the window and verify the process remains running.",
+        "Launch Echo again and verify the hidden window returns.",
+        "Choose Quit and verify the process exits."
+      ],
+      "passes": false
+    },
+    {
+      "id": "APP-002",
+      "category": "application",
+      "description": "The first release refuses unsupported non-X11 sessions clearly and does not start global input backends.",
+      "depends_on": ["APP-001"],
+      "acceptance_steps": [
+        "Run with a non-X11 session environment and verify the window explains that this release requires X11.",
+        "Verify no shortcut grab or paste-injection backend starts in that state.",
+        "Run in X11 and verify the unsupported-session message is absent."
+      ],
+      "passes": false
+    },
+    {
+      "id": "SET-001",
+      "category": "settings",
+      "description": "Typed, versioned non-secret settings persist atomically under the XDG configuration directory with documented defaults.",
+      "depends_on": ["INIT-001"],
+      "acceptance_steps": [
+        "Run unit tests covering every default in the porting guide.",
+        "Change settings, restart Echo, and verify they reload.",
+        "Interrupt a simulated write and verify the last valid settings remain readable.",
+        "Inspect the settings file and verify it contains no API key or transcript."
+      ],
+      "passes": false
+    },
+    {
+      "id": "KEY-001",
+      "category": "security",
+      "description": "The Groq API key can be saved, replaced, detected, and removed through the desktop Secret Service without exposing its value.",
+      "depends_on": ["INIT-001"],
+      "acceptance_steps": [
+        "Save a test key and verify the UI reports that a key exists without displaying it.",
+        "Restart Echo and verify the saved status remains.",
+        "Replace and then remove the key successfully.",
+        "Inspect configuration, logs, process arguments, and environment output and verify the key is absent.",
+        "Stop the Secret Service and verify Echo shows an actionable storage error."
+      ],
+      "passes": false
+    },
+    {
+      "id": "HOTKEY-001",
+      "category": "input",
+      "description": "The X11 backend globally emits one press and one release for an unmodified F10 hold across lock states and key repeat.",
+      "depends_on": ["APP-002", "SET-001"],
+      "acceptance_steps": [
+        "Hold F10 in another application and verify Echo receives one press and one final release.",
+        "Repeat with Caps Lock and Num Lock enabled in all combinations.",
+        "Hold F10 past the keyboard repeat delay and verify recording does not release early.",
+        "Change the keyboard layout and verify the binding is re-resolved.",
+        "Force a grab conflict and verify Echo reports it without exiting."
+      ],
+      "passes": false
+    },
+    {
+      "id": "HOTKEY-002",
+      "category": "input",
+      "description": "The user can capture, validate, save, and immediately activate a custom global shortcut while retaining the old binding on failure.",
+      "depends_on": ["HOTKEY-001"],
+      "acceptance_steps": [
+        "Capture a non-modifier key and verify its readable name is shown and persists after restart.",
+        "Verify Escape cancels capture and bare modifiers are rejected.",
+        "Configure a shortcut with modifiers and verify press/release works globally.",
+        "Attempt a conflicting binding and verify the old shortcut still works.",
+        "Capture the ThinkPad phone-marked key and verify the actual emitted keysym can be bound."
+      ],
+      "passes": false
+    },
+    {
+      "id": "AUDIO-001",
+      "category": "audio",
+      "description": "Echo lists live microphone inputs, supports System Default, persists a selection, and falls back when a selected device disappears.",
+      "depends_on": ["SET-001"],
+      "acceptance_steps": [
+        "Open the input selector and verify System Default and connected microphones appear.",
+        "Select a microphone, restart Echo, and verify the selection persists.",
+        "Disconnect the selected microphone and verify Echo returns to System Default with a clear UI update.",
+        "Reconnect a microphone and verify the list refreshes without restarting."
+      ],
+      "passes": false
+    },
+    {
+      "id": "AUDIO-002",
+      "category": "audio",
+      "description": "Echo records the selected microphone and finalizes valid 16 kHz mono PCM WAV data without blocking the GTK thread.",
+      "depends_on": ["AUDIO-001"],
+      "acceptance_steps": [
+        "Record from the system default and a specifically selected microphone.",
+        "Inspect each WAV and verify 16 kHz, mono, 16-bit PCM metadata.",
+        "Run conversion tests for representative mono/stereo integer and float device samples.",
+        "Interact with the settings window during recording and verify it remains responsive.",
+        "Simulate device loss and verify capture terminates cleanly with no poisoned next recording."
+      ],
+      "passes": false
+    },
+    {
+      "id": "GROQ-001",
+      "category": "transcription",
+      "description": "The Groq client prewarms and submits WAV transcription requests with the selected model, language, vocabulary, and style prompt.",
+      "depends_on": ["KEY-001", "AUDIO-002", "SET-001"],
+      "acceptance_steps": [
+        "Use a mock server to verify endpoint method, authorization, multipart file, model, language, prompt, and response format.",
+        "Verify auto-detect omits the language field.",
+        "Verify empty vocabulary still includes the selected style exemplar.",
+        "Verify surrounding whitespace is trimmed from returned text.",
+        "Verify connection prewarm failure does not fail the later transcription."
+      ],
+      "passes": false
+    },
+    {
+      "id": "GROQ-002",
+      "category": "transcription",
+      "description": "Groq and network failures map to short actionable errors without leaking secrets or transcript content.",
+      "depends_on": ["GROQ-001"],
+      "acceptance_steps": [
+        "Test missing key, 401/403, 413, 429, 5xx, malformed response, timeout, DNS, and offline mappings.",
+        "Verify a useful Groq error.message is shown with a bounded length.",
+        "Verify requests are not automatically retried.",
+        "Inspect captured logs and verify keys, authorization values, audio, and transcript text are absent."
+      ],
+      "passes": false
+    },
+    {
+      "id": "PASTE-001",
+      "category": "input",
+      "description": "The X11 backend pastes transcript text into the previously focused application using the clipboard and XTEST while preserving focus.",
+      "depends_on": ["APP-002"],
+      "acceptance_steps": [
+        "Paste into a GTK entry, browser field, terminal, and rich text editor.",
+        "Verify Echo never takes focus during the paste.",
+        "With a text clipboard value present, verify it is restored after paste.",
+        "Change the clipboard during paste and verify Echo does not overwrite the newer value.",
+        "Force injection failure and verify the transcript remains on the clipboard with an actionable error."
+      ],
+      "passes": false
+    },
+    {
+      "id": "FLOW-001",
+      "category": "dictation",
+      "description": "The controller implements the complete hold-to-record transaction with a 300 ms minimum, Escape cancellation, and no overlapping work.",
+      "depends_on": ["HOTKEY-001", "AUDIO-002", "GROQ-002", "PASTE-001"],
+      "acceptance_steps": [
+        "Run controller tests for every transition and invalid event in Idle, Recording, Transcribing, and Error.",
+        "Tap the shortcut for less than 300 ms and verify no request or paste occurs.",
+        "Hold, speak, and release and verify one recording, request, and paste occur.",
+        "Press Escape while recording and verify no request or paste occurs and Escape does not reach the focused app.",
+        "Attempt another hold while transcribing and verify it is ignored.",
+        "Verify temporary audio is deleted after success, empty speech, cancellation, and every failure."
+      ],
+      "passes": false
+    },
+    {
+      "id": "STYLE-001",
+      "category": "transcription",
+      "description": "Model, language, Normal/Lower Case style, and custom vocabulary controls match the macOS Groq behavior.",
+      "depends_on": ["GROQ-001"],
+      "acceptance_steps": [
+        "Verify both required Groq model IDs can be selected and persist.",
+        "Verify Auto-detect and every required language can be selected and persist.",
+        "Verify Normal returns text unchanged and Lower Case lowercases the result.",
+        "Verify vocabulary persists and is joined with the style exemplar.",
+        "Start recording, change a setting, and verify the active transaction uses its starting snapshot."
+      ],
+      "passes": false
+    },
+    {
+      "id": "OVERLAY-001",
+      "category": "ui",
+      "description": "A non-interactive X11 overlay communicates recording, transcribing, and timed error states without stealing focus.",
+      "depends_on": ["FLOW-001"],
+      "acceptance_steps": [
+        "Verify a red pulse appears near the active monitor's bottom center while recording.",
+        "Verify a faster neutral pulse appears while transcribing.",
+        "Verify a one-line error appears for 2.5 seconds and then hides.",
+        "Verify the overlay accepts neither focus nor pointer input and is absent from task switchers.",
+        "Verify focus remains in the original application across all states.",
+        "Exercise the overlay on a multi-monitor X11 setup."
+      ],
+      "passes": false
+    },
+    {
+      "id": "HISTORY-001",
+      "category": "settings",
+      "description": "Echo tracks lifetime dictated words and exposes the memory-only last successful transcript for copying.",
+      "depends_on": ["FLOW-001", "SET-001"],
+      "acceptance_steps": [
+        "Complete a transcription and verify its whitespace-delimited words are added once.",
+        "Restart Echo and verify the total persists and the last transcript is empty.",
+        "Copy the last transcript and verify exact clipboard text.",
+        "Verify failed, empty, short, and cancelled recordings change neither value."
+      ],
+      "passes": false
+    },
+    {
+      "id": "UI-001",
+      "category": "ui",
+      "description": "The compact libadwaita settings window exposes every required setting, API-key action, status, Help, and Quit without an engine picker.",
+      "depends_on": ["KEY-001", "HOTKEY-002", "AUDIO-001", "STYLE-001", "HISTORY-001"],
+      "acceptance_steps": [
+        "Verify every control and action specified in the porting guide is present and functional.",
+        "Verify no local/Groq engine picker, tray requirement, or out-of-scope feature appears.",
+        "Resize within reasonable bounds and verify labels and controls remain usable.",
+        "Navigate all controls with the keyboard and verify useful accessible names.",
+        "Verify the window uses Echo branding without copying macOS menu styling."
+      ],
+      "passes": false
+    },
+    {
+      "id": "AUTOSTART-001",
+      "category": "desktop",
+      "description": "Launch at login is controlled by an XDG autostart desktop file tied to the current executable path.",
+      "depends_on": ["SET-001", "APP-001"],
+      "acceptance_steps": [
+        "Enable launch at login and inspect a valid desktop file under the XDG autostart directory.",
+        "Log into a test X11 session and verify Echo starts once.",
+        "Disable the setting and verify the autostart file is removed.",
+        "Move the binary and verify the UI warns or requires retoggling rather than silently writing an invalid path."
+      ],
+      "passes": false
+    },
+    {
+      "id": "E2E-001",
+      "category": "quality",
+      "description": "The complete dictation workflow passes the documented X11 manual matrix and a clean-checkout automated suite.",
+      "depends_on": ["OVERLAY-001", "UI-001", "AUTOSTART-001"],
+      "acceptance_steps": [
+        "Run scripts/bootstrap.sh and scripts/check.sh from a clean checkout.",
+        "Record dated evidence for every manual X11 acceptance case in the porting guide.",
+        "Verify the core hold F10, speak, release, paste path repeatedly in two X11 environments.",
+        "Verify no tested exit path leaves temporary audio or a stuck key grab.",
+        "Verify no API key or transcript content appears in logs."
+      ],
+      "passes": false
+    },
+    {
+      "id": "RELEASE-001",
+      "category": "release",
+      "description": "A versioned x86-64 tarball runs without a Rust toolchain on the documented baseline and accurately states its dynamic dependencies and X11 limitation.",
+      "depends_on": ["E2E-001"],
+      "acceptance_steps": [
+        "Build in a clean container based on the oldest supported distribution.",
+        "Inspect the binary with ldd and document every required runtime package.",
+        "Extract the tarball on a clean matching X11 system and run Echo without a Rust toolchain.",
+        "Verify the archive contains the binary, README, license, and icons in the documented layout.",
+        "Generate and verify the published SHA-256 checksum.",
+        "Verify the README prominently says X11-only and x86-64 glibc."
+      ],
+      "passes": false
+    },
+    {
+      "id": "WAYLAND-PLAN-001",
+      "category": "future",
+      "description": "A non-implemented Wayland design note validates the existing backend seams against XDG Global Shortcuts and persistent Remote Desktop portal authorization.",
+      "depends_on": ["RELEASE-001"],
+      "acceptance_steps": [
+        "Document the portal session lifecycles, Activated/Deactivated mapping, restore-token rotation, and cancellation behavior.",
+        "Verify the design fits behind the existing ShortcutBackend and PasteBackend seams without changing controller behavior.",
+        "List minimum portal interface versions and a GNOME/KDE test matrix.",
+        "Verify no Wayland implementation or compositor-specific dependency was added to the X11 release."
+      ],
+      "passes": false
+    }
+  ]
+}

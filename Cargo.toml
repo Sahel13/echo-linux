@@ -1,0 +1,11 @@
+[package]
+name = "echo"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Echo for Linux"
+license = "MIT"
+
+[dependencies]
+adw = { package = "libadwaita", version = "0.8", features = ["v1_1"] }
+gtk = { package = "gtk4", version = "0.10", features = ["v4_6"] }
