@@ -5,7 +5,7 @@
 - Last completed feature: HOTKEY-002
 - Next eligible feature: AUDIO-001
 - Build status: passing
-- Known blockers: none
+- Known blockers: AUDIO-001 manual verification requires an accessible X11 desktop and live microphone hot-plug.
 
 ## Session log
 
@@ -129,4 +129,14 @@ Append entries; do not rewrite earlier entries.
 - Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`.
 - Manual acceptance evidence: User confirmed every HOTKEY-002 acceptance step: capturing and persisting a readable non-modifier shortcut, Escape cancellation and bare-modifier rejection, a global modified shortcut with press/release behavior, conflict rejection while the old shortcut remains active, and capture/binding of the ThinkPad phone-marked key's actual emitted keysym.
 - Known limitations or follow-up: None for HOTKEY-002.
+- Next eligible feature: AUDIO-001
+
+### 2026-07-30 — AUDIO-001 — live microphone selector implemented; manual verification pending
+
+- Agent/session: Codex
+- Commit: this commit (`AUDIO-001: add microphone selector`)
+- What changed: Added CPAL input-device discovery on a worker thread, a System Default-first microphone selector, a manual refresh action plus two-second live refresh, selection persistence, and a visible System Default fallback when the chosen device disappears. Device discovery uses CPAL's Linux input names as the available cross-session selection identifiers.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `cargo test --all-targets --locked`; `cargo clippy --all-targets -- -D warnings`; `xwininfo -root -display "$DISPLAY"`; `pactl list short sources`; `target/debug/echo`; final `scripts/check.sh`; `git diff --check`.
+- Manual acceptance evidence: The three focused automated tests cover System Default ordering, retention of a connected selected input, and fallback when that input disappears. Manual verification was unavailable: `DISPLAY=:0` cannot be opened, Echo reports `Failed to open display`, and PulseAudio rejects the sandbox connection. No accessible microphone or rendered selector was available to inspect.
+- Known limitations or follow-up: Keep `AUDIO-001` at `passes: false`. In an accessible X11 desktop with at least two input sources, launch Echo and verify System Default plus each connected microphone appears in Input. Select a non-default device, quit/relaunch, and verify the selected label persists. Disconnect that device and wait up to two seconds (or click Refresh microphones); verify the selector changes to System Default and says the selected microphone disappeared. Reconnect an input and verify it appears in the list within two seconds without restarting Echo.
 - Next eligible feature: AUDIO-001

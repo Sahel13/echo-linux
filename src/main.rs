@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+mod audio;
 mod secret;
 mod settings;
 mod shortcut;
@@ -173,9 +174,11 @@ fn activate(
         &change_shortcut,
         &shortcut_binding_label,
         shortcut_controller,
-        settings_store,
+        settings_store.clone(),
         settings.clone(),
     );
+
+    install_microphone_selector(&content, settings_store.clone(), settings.clone());
 
     window.connect_close_request(|window| {
         window.hide();
@@ -183,6 +186,162 @@ fn activate(
     });
     *existing_window.borrow_mut() = Some(window.clone());
     window.present();
+}
+
+fn install_microphone_selector(
+    content: &gtk::Box,
+    store: Option<settings::SettingsStore>,
+    settings: Rc<RefCell<settings::Settings>>,
+) {
+    let input_label = gtk::Label::new(Some("Input"));
+    input_label.set_halign(gtk::Align::Start);
+    content.append(&input_label);
+
+    let selector = gtk::DropDown::from_strings(&["System Default"]);
+    selector.set_halign(gtk::Align::Fill);
+    selector.set_hexpand(true);
+    content.append(&selector);
+
+    let status = gtk::Label::new(Some("Loading microphones…"));
+    status.set_halign(gtk::Align::Start);
+    status.set_wrap(true);
+    content.append(&status);
+
+    let refresh = gtk::Button::with_label("Refresh microphones");
+    refresh.set_halign(gtk::Align::Start);
+    content.append(&refresh);
+
+    let devices = Rc::new(RefCell::new(Vec::<audio::InputDevice>::new()));
+    let updating = Rc::new(Cell::new(false));
+    let refresh_in_progress = Rc::new(Cell::new(false));
+
+    selector.connect_selected_notify({
+        let devices = devices.clone();
+        let settings = settings.clone();
+        let store = store.clone();
+        let status = status.clone();
+        let updating = updating.clone();
+        move |selector| {
+            if updating.get() {
+                return;
+            }
+            let selection = match selector.selected() {
+                0 => settings::Microphone::SystemDefault,
+                selected => match usize::try_from(selected - 1)
+                    .ok()
+                    .and_then(|index| devices.borrow().get(index).cloned())
+                {
+                    Some(device) => settings::Microphone::Device { id: device.id },
+                    None => return,
+                },
+            };
+            settings.borrow_mut().microphone = selection;
+            if let Some(store) = &store {
+                if store.save(&settings.borrow()).is_err() {
+                    status.set_text("Couldn't save microphone selection.");
+                    return;
+                }
+            }
+            status.set_text("Microphone selection saved.");
+        }
+    });
+
+    let refresh_devices = Rc::new({
+        let selector = selector.clone();
+        let status = status.clone();
+        let devices = devices.clone();
+        let updating = updating.clone();
+        let refresh_in_progress = refresh_in_progress.clone();
+        let settings = settings.clone();
+        let store = store.clone();
+        move || {
+            if refresh_in_progress.replace(true) {
+                return;
+            }
+            status.set_text("Loading microphones…");
+            start_microphone_refresh(
+                selector.clone(),
+                status.clone(),
+                devices.clone(),
+                updating.clone(),
+                refresh_in_progress.clone(),
+                settings.clone(),
+                store.clone(),
+            );
+        }
+    });
+
+    refresh.connect_clicked({
+        let refresh_devices = refresh_devices.clone();
+        move |_| refresh_devices()
+    });
+
+    refresh_devices();
+    gtk::glib::timeout_add_local(Duration::from_secs(2), move || {
+        refresh_devices();
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+fn start_microphone_refresh(
+    selector: gtk::DropDown,
+    status: gtk::Label,
+    devices: Rc<RefCell<Vec<audio::InputDevice>>>,
+    updating: Rc<Cell<bool>>,
+    refresh_in_progress: Rc<Cell<bool>>,
+    settings: Rc<RefCell<settings::Settings>>,
+    store: Option<settings::SettingsStore>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(audio::list_input_devices());
+    });
+
+    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
+        match receiver.try_recv() {
+            Ok(Ok(new_devices)) => {
+                let selection = settings.borrow().microphone.clone();
+                let (selection, fell_back) = audio::reconcile_selection(&selection, &new_devices);
+                let strings = gtk::StringList::new(&[]);
+                strings.append("System Default");
+                for device in &new_devices {
+                    strings.append(&device.name);
+                }
+
+                updating.set(true);
+                *devices.borrow_mut() = new_devices;
+                selector.set_model(Some(&strings));
+                selector.set_selected(
+                    audio::selected_index(&selection, &devices.borrow()).unwrap_or(0),
+                );
+                updating.set(false);
+
+                if fell_back {
+                    settings.borrow_mut().microphone = selection;
+                    if let Some(store) = &store {
+                        if store.save(&settings.borrow()).is_err() {
+                            status.set_text("Selected microphone disappeared; using System Default. Couldn't save it.");
+                        } else {
+                            status
+                                .set_text("Selected microphone disappeared; using System Default.");
+                        }
+                    } else {
+                        status.set_text("Selected microphone disappeared; using System Default.");
+                    }
+                } else {
+                    status.set_text("Microphones refreshed.");
+                }
+                refresh_in_progress.set(false);
+                gtk::glib::ControlFlow::Break
+            }
+            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                status.set_text("Couldn't list microphones. Check your audio connection.");
+                refresh_in_progress.set(false);
+                gtk::glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+        }
+    });
 }
 
 enum SecretOperation {
