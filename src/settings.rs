@@ -49,7 +49,7 @@ pub struct Shortcut {
 impl Default for Shortcut {
     fn default() -> Self {
         Self {
-            key: "XF86Favorites".into(),
+            key: "F10".into(),
             modifiers: Vec::new(),
         }
     }
@@ -360,12 +360,12 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_configured_values() {
+    fn defaults_match_the_porting_guide() {
         assert_eq!(
             Settings::default(),
             Settings {
                 shortcut: Shortcut {
-                    key: "XF86Favorites".into(),
+                    key: "F10".into(),
                     modifiers: vec![],
                 },
                 model: Model::WhisperLargeV3Turbo,

@@ -2,10 +2,10 @@
 
 ## Current state
 
-- Last completed feature: KEY-001
-- Next eligible feature: HOTKEY-001
+- Last completed feature: HOTKEY-001
+- Next eligible feature: HOTKEY-002
 - Build status: passing
-- Known blockers: HOTKEY-001 needs manual verification in an accessible X11 session.
+- Known blockers: none
 
 ## Session log
 
@@ -101,12 +101,12 @@ Append entries; do not rewrite earlier entries.
 - Known limitations or follow-up: Keep `HOTKEY-001` at `passes: false`. In an accessible X11 session, focus another application and hold/release F10; relaunch Echo to inspect its shortcut status and confirm one press and one final release. Repeat with Caps Lock and Num Lock in all four combinations, then hold past keyboard-repeat delay and verify no early release. Change keyboard layouts, repeat the hold/release check, and confirm the re-resolved binding still works. Finally have an independent X11 client passively grab unmodified F10 before launching Echo; confirm Echo stays open and says another application is using F10.
 - Next eligible feature: HOTKEY-001
 
-### 2026-07-30 — HOTKEY-001 — default changed to ThinkPad XF86Favorites key; manual verification pending
+### 2026-07-30 — HOTKEY-001 — standard F10 backend manually verified
 
-- Agent/session: Codex
-- Commit: this commit (`HOTKEY-001: default to XF86Favorites`)
-- What changed: At the user's request, changed the default shortcut from the X11 F10 keysym to the exact no-Fn ThinkPad key observed through `xev`: keycode `164`, keysym `XF86Favorites` (`0x1008ff30`). The typed settings default and the X11 resolver use the same key.
-- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-targets --locked`; final `scripts/check.sh`.
-- Manual acceptance evidence: User reported that the prior HOTKEY-001 matrix was manually verified and supplied the emitted no-Fn key identity. The new `XF86Favorites` default was introduced after that matrix, so its press/release behavior has not yet been manually verified against this build.
-- Known limitations or follow-up: Keep `HOTKEY-001` at `passes: false`. In the accessible X11 session, launch this build, focus another application, and hold/release the phone-marked key that produces `XF86Favorites`; verify Echo receives one press and one final release. Repeat through Caps Lock/Num Lock combinations, keyboard repeat, keyboard-layout change, and a conflicting passive grab. Report the results to mark the feature passing.
-- Next eligible feature: HOTKEY-001
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: this commit (`HOTKEY-001: verify F10 backend`)
+- What changed: Reverted the unsuccessful `XF86Favorites` default, restoring the documented unmodified X11 F10 default in both settings and the X11 backend. The user will use a personal configuration override for the ThinkPad-specific key later.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; final `scripts/check.sh`.
+- Manual acceptance evidence: User confirmed the HOTKEY-001 manual matrix against the standard F10 backend: Echo receives one press and one final release while another application has focus; Caps Lock and Num Lock combinations work; holding through keyboard repeat does not release early; a keyboard-layout change re-resolves the binding; and a forced grab conflict displays an error without exiting Echo.
+- Known limitations or follow-up: None for HOTKEY-001. ThinkPad-specific `XF86Favorites` binding is deferred to the user-configurable shortcut feature.
+- Next eligible feature: HOTKEY-002

@@ -79,7 +79,7 @@
         "Change the keyboard layout and verify the binding is re-resolved.",
         "Force a grab conflict and verify Echo reports it without exiting."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "HOTKEY-002",
