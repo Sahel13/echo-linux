@@ -1,6 +1,28 @@
 use adw::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 
+#[derive(Debug, PartialEq, Eq)]
+enum SessionSupport {
+    X11,
+    Unsupported,
+}
+
+fn session_support(backend: Option<gtk::gdk::Backend>) -> SessionSupport {
+    match backend {
+        Some(gtk::gdk::Backend::X11) => SessionSupport::X11,
+        _ => SessionSupport::Unsupported,
+    }
+}
+
+fn status_message(session: SessionSupport) -> &'static str {
+    match session {
+        SessionSupport::X11 => "Echo for Linux is ready.",
+        SessionSupport::Unsupported => {
+            "Echo for Linux requires an X11 session. Global shortcuts and pasting are disabled."
+        }
+    }
+}
+
 fn main() {
     let application = adw::Application::builder()
         .application_id("io.github.sahel.Echo")
@@ -43,7 +65,8 @@ fn activate(
     title.set_halign(gtk::Align::Start);
     content.append(&title);
 
-    let message = gtk::Label::new(Some("Echo for Linux is ready."));
+    let backend = gtk::gdk::Display::default().map(|display| display.backend());
+    let message = gtk::Label::new(Some(status_message(session_support(backend))));
     message.set_halign(gtk::Align::Start);
     message.set_wrap(true);
     content.append(&message);
@@ -67,4 +90,35 @@ fn activate(
     });
     *existing_window.borrow_mut() = Some(window.clone());
     window.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x11_session_is_supported() {
+        assert_eq!(
+            session_support(Some(gtk::gdk::Backend::X11)),
+            SessionSupport::X11
+        );
+        assert_eq!(
+            status_message(SessionSupport::X11),
+            "Echo for Linux is ready."
+        );
+    }
+
+    #[test]
+    fn non_x11_backends_are_rejected() {
+        for backend in [
+            None,
+            Some(gtk::gdk::Backend::Wayland),
+            Some(gtk::gdk::Backend::Broadway),
+            Some(gtk::gdk::Backend::MacOS),
+            Some(gtk::gdk::Backend::Win32),
+        ] {
+            assert_eq!(session_support(backend), SessionSupport::Unsupported);
+        }
+        assert!(status_message(SessionSupport::Unsupported).contains("requires an X11 session"));
+    }
 }
