@@ -259,7 +259,7 @@
         "Verify no tested exit path leaves temporary audio or a stuck key grab.",
         "Verify no API key or transcript content appears in logs."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "RELEASE-001",
