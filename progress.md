@@ -160,3 +160,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: Automated tests pass for mono integer conversion, stereo float downmixing, 48 kHz resampling, 16 kHz/mono/16-bit PCM WAV headers, and fresh capture state after simulated device loss. Live verification was unavailable: PulseAudio rejected the sandbox connection, `pactl` reported no accessible sources, the ignored live-device test found no connected microphone, and GTK could not open `DISPLAY=:0`.
 - Known limitations or follow-up: Keep `AUDIO-002` at `passes: false`. On an accessible X11 desktop with a default input and a second microphone, run `cargo test --locked audio::tests::live_default_and_selected_microphones_finalize_valid_wavs -- --ignored` and inspect the resulting checks for both capture paths. Then use the later FLOW-001 recording control to verify the settings window stays responsive during capture, unplug an active microphone, confirm a clean failure, and immediately start a new recording successfully.
 - Next eligible feature: AUDIO-002
+
+### 2026-07-30 — AUDIO-002 — verified PipeWire capture; background microphone refresh made silent
+
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: this commit (`AUDIO-002: quiet microphone refresh status`)
+- What changed: The periodic microphone refresh still runs every two seconds, but no longer replaces the current status with “Loading microphones…”. The initial load remains labelled and completed refreshes, selection changes, and errors remain visible.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `scripts/check.sh`; `git diff --check`. User run: `cargo test --locked audio::tests::live_default_and_selected_microphones_finalize_valid_wavs -- --ignored`.
+- Manual acceptance evidence: User ran the ignored live-device test successfully on their PipeWire system. It captured the system default and a specifically selected microphone and verified each finalized WAV is 16 kHz, mono, and 16-bit PCM. ALSA compatibility-layer diagnostics were emitted but the test passed.
+- Known limitations or follow-up: Keep `AUDIO-002` at `passes: false` until the settings window is manually confirmed responsive during an active recording and a live microphone disconnect is confirmed to terminate capture cleanly and permit a fresh recording. Also visually confirm the periodic refresh no longer flashes “Loading microphones…” while the settings window is open.
+- Next eligible feature: AUDIO-002

@@ -258,7 +258,6 @@ fn install_microphone_selector(
             if refresh_in_progress.replace(true) {
                 return;
             }
-            status.set_text("Loading microphones…");
             start_microphone_refresh(
                 selector.clone(),
                 status.clone(),
