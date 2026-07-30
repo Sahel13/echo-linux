@@ -51,7 +51,7 @@
         "Interrupt a simulated write and verify the last valid settings remain readable.",
         "Inspect the settings file and verify it contains no API key or transcript."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "KEY-001",

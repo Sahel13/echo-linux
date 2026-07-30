@@ -60,3 +60,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: User confirmed the APP-002 acceptance checks: a non-X11 session shows the X11-required explanation with no shortcut-grab or paste-injection activity, and an X11 session does not show the unsupported-session message.
 - Known limitations or follow-up: None for APP-002.
 - Next eligible feature: SET-001
+
+### 2026-07-30 — SET-001 — versioned atomic XDG settings verified
+
+- Agent/session: Codex
+- Commit: this commit (`SET-001: persist typed XDG settings`)
+- What changed: Added typed non-secret settings with every documented default, JSON version `1`, and an XDG configuration path at `echo/settings.json`. Echo loads and atomically rewrites a valid document at startup; failed loads or saves produce a visible error without logging configuration contents. Atomic writes flush a temporary file before replacement and sync the containing directory on Linux.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-targets --locked`; final `scripts/check.sh`.
+- Manual acceptance evidence: No display server, hardware, credential, or interactive control is required for this persistence feature. The seven passing tests exercise all acceptance cases directly: every default, XDG path selection, changed settings reload via a fresh store, an interruption during the real write path before replacement, and inspection that the saved document has neither API-key nor transcript fields.
+- Known limitations or follow-up: Settings controls are intentionally deferred to their ordered features. The persisted schema includes the required setting types but no secret value or last transcript field.
+- Next eligible feature: KEY-001

@@ -1,6 +1,8 @@
 use adw::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 
+mod settings;
+
 #[derive(Debug, PartialEq, Eq)]
 enum SessionSupport {
     X11,
@@ -71,6 +73,14 @@ fn activate(
     message.set_wrap(true);
     content.append(&message);
 
+    if let Some(error_message) = settings_load_error_message() {
+        let error = gtk::Label::new(Some(&error_message));
+        error.add_css_class("error");
+        error.set_halign(gtk::Align::Start);
+        error.set_wrap(true);
+        content.append(&error);
+    }
+
     let quit = gtk::Button::with_label("Quit");
     quit.set_halign(gtk::Align::End);
     quit.set_action_name(Some("app.quit"));
@@ -90,6 +100,18 @@ fn activate(
     });
     *existing_window.borrow_mut() = Some(window.clone());
     window.present();
+}
+
+fn settings_load_error_message() -> Option<String> {
+    let result = (|| {
+        let store = settings::SettingsStore::for_current_user()?;
+        let settings = store.load()?;
+        store.save(&settings)
+    })();
+
+    result
+        .err()
+        .map(|error| format!("Couldn't load settings: {error}"))
 }
 
 #[cfg(test)]
