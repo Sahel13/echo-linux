@@ -31,12 +31,12 @@ fn session_support(backend: Option<gtk::gdk::Backend>) -> SessionSupport {
     }
 }
 
-fn status_message(session: SessionSupport) -> &'static str {
+fn status_message(session: SessionSupport) -> Option<&'static str> {
     match session {
-        SessionSupport::X11 => "Echo for Linux is ready.",
-        SessionSupport::Unsupported => {
-            "Echo for Linux requires an X11 session. Global shortcuts and pasting are disabled."
-        }
+        SessionSupport::X11 => None,
+        SessionSupport::Unsupported => Some(
+            "Echo for Linux requires an X11 session. Global shortcuts and pasting are disabled.",
+        ),
     }
 }
 
@@ -117,10 +117,12 @@ fn activate(
     let history = Rc::new(RefCell::new(history::History::new(
         settings.borrow().total_words,
     )));
-    let message = gtk::Label::new(Some(status_message(session)));
-    message.set_halign(gtk::Align::Start);
-    message.set_wrap(true);
-    content.append(&message);
+    if let Some(status_message) = status_message(session) {
+        let message = gtk::Label::new(Some(status_message));
+        message.set_halign(gtk::Align::Start);
+        message.set_wrap(true);
+        content.append(&message);
+    }
 
     let shortcut_runtime = if session == SessionSupport::X11 {
         let shortcut_status = gtk::Label::new(Some("Starting global shortcut…"));
@@ -232,14 +234,6 @@ fn activate(
 
     if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
         let overlay = overlay::Overlay::new(application);
-        let transaction_status = gtk::Label::new(Some("Ready."));
-        transaction_status.set_halign(gtk::Align::Start);
-        transaction_status.set_wrap(true);
-        content.append(&transaction_status);
-        let diagnostic_status = gtk::Label::new(Some("Diagnostic: waiting for a transaction."));
-        diagnostic_status.set_halign(gtk::Align::Start);
-        diagnostic_status.set_wrap(true);
-        content.append(&diagnostic_status);
         let history_runtime = controller::HistoryRuntime::new(
             settings_store.clone(),
             history,
@@ -252,8 +246,6 @@ fn activate(
             history_runtime,
             shortcut_controller,
             paste_backend.borrow().clone(),
-            transaction_status,
-            diagnostic_status,
             overlay,
         )));
         gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
@@ -1116,10 +1108,7 @@ mod tests {
             session_support(Some(gtk::gdk::Backend::X11)),
             SessionSupport::X11
         );
-        assert_eq!(
-            status_message(SessionSupport::X11),
-            "Echo for Linux is ready."
-        );
+        assert_eq!(status_message(SessionSupport::X11), None);
     }
 
     #[test]
@@ -1133,7 +1122,8 @@ mod tests {
         ] {
             assert_eq!(session_support(backend), SessionSupport::Unsupported);
         }
-        assert!(status_message(SessionSupport::Unsupported).contains("requires an X11 session"));
+        assert!(status_message(SessionSupport::Unsupported)
+            .is_some_and(|message| message.contains("requires an X11 session")));
     }
 
     #[test]
