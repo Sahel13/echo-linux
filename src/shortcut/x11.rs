@@ -1,6 +1,7 @@
-use super::{ShortcutBackend, ShortcutEvent};
+use super::{Binding, Command, ShortcutBackend, ShortcutEvent, UpdateResult};
+use crate::settings;
 use std::{
-    sync::mpsc::Sender,
+    sync::mpsc::{Receiver, Sender},
     thread,
     time::{Duration, Instant},
 };
@@ -15,7 +16,6 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
-const F10_KEYSYM: u32 = 0xffc7;
 const NUM_LOCK_KEYSYM: u32 = 0xff7f;
 const FALLBACK_RELEASE_DELAY: Duration = Duration::from_millis(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -23,7 +23,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 pub struct X11ShortcutBackend;
 
 impl ShortcutBackend for X11ShortcutBackend {
-    fn run(self, sender: Sender<ShortcutEvent>) {
+    fn run(
+        self,
+        initial_binding: Binding,
+        commands: Receiver<Command>,
+        sender: Sender<ShortcutEvent>,
+    ) {
         let Ok((connection, screen)) = x11rb::connect(None) else {
             let _ = sender.send(ShortcutEvent::Unavailable);
             return;
@@ -31,7 +36,7 @@ impl ShortcutBackend for X11ShortcutBackend {
 
         let root = connection.setup().roots[screen].root;
         let detectable_auto_repeat = enable_detectable_auto_repeat(&connection);
-        let mut binding = match Binding::resolve(&connection, root) {
+        let mut binding = match GrabbedBinding::resolve(&connection, root, &initial_binding) {
             Ok(binding) => binding,
             Err(GrabError::Conflict) => {
                 let _ = sender.send(ShortcutEvent::Conflict);
@@ -46,6 +51,30 @@ impl ShortcutBackend for X11ShortcutBackend {
 
         let mut repeat_filter = RepeatFilter::new(detectable_auto_repeat);
         loop {
+            while let Ok(Command::Update {
+                binding: requested,
+                result,
+            }) = commands.try_recv()
+            {
+                if requested == binding.requested {
+                    let _ = result.send(UpdateResult::Applied);
+                    continue;
+                }
+                match GrabbedBinding::resolve(&connection, root, &requested) {
+                    Ok(new_binding) => {
+                        binding.ungrab(&connection);
+                        binding = new_binding;
+                        let _ = result.send(UpdateResult::Applied);
+                        let _ = sender.send(ShortcutEvent::Active);
+                    }
+                    Err(GrabError::Conflict) => {
+                        let _ = result.send(UpdateResult::Conflict);
+                    }
+                    Err(GrabError::Unavailable) => {
+                        let _ = result.send(UpdateResult::Unavailable);
+                    }
+                }
+            }
             match connection.poll_for_event() {
                 Ok(Some(event)) => {
                     let events = match event {
@@ -61,7 +90,7 @@ impl ShortcutBackend for X11ShortcutBackend {
                         {
                             send_events(&sender, repeat_filter.flush());
                             binding.ungrab(&connection);
-                            match Binding::resolve(&connection, root) {
+                            match GrabbedBinding::resolve(&connection, root, &binding.requested) {
                                 Ok(new_binding) => {
                                     binding = new_binding;
                                     let _ = sender.send(ShortcutEvent::Active);
@@ -133,21 +162,28 @@ fn enable_detectable_auto_repeat(connection: &RustConnection) -> bool {
     .unwrap_or(false)
 }
 
-struct Binding {
+struct GrabbedBinding {
     root: u32,
     keycode: u8,
     modifiers: Vec<ModMask>,
+    requested: Binding,
 }
 
-impl Binding {
-    fn resolve(connection: &RustConnection, root: u32) -> Result<Self, GrabError> {
-        let keycode = keycode_for_keysym(connection, F10_KEYSYM).ok_or(GrabError::Unavailable)?;
+impl GrabbedBinding {
+    fn resolve(
+        connection: &RustConnection,
+        root: u32,
+        requested: &Binding,
+    ) -> Result<Self, GrabError> {
+        let keycode =
+            keycode_for_keysym(connection, requested.keysym).ok_or(GrabError::Unavailable)?;
         let num_lock = num_lock_mask(connection).ok_or(GrabError::Unavailable)?;
-        let modifiers = lock_modifier_variants(num_lock);
+        let modifiers = lock_modifier_variants(modifier_mask(&requested.modifiers), num_lock);
         let binding = Self {
             root,
             keycode,
             modifiers,
+            requested: requested.clone(),
         };
         binding.grab(connection)?;
         Ok(binding)
@@ -252,14 +288,25 @@ fn keycode_for_keycode(connection: &RustConnection, keycode: u8, wanted_keysym: 
         .is_some_and(|mapping| mapping.keysyms.contains(&wanted_keysym))
 }
 
-fn lock_modifier_variants(num_lock: ModMask) -> Vec<ModMask> {
+fn modifier_mask(modifiers: &[settings::Modifier]) -> ModMask {
+    modifiers.iter().fold(ModMask::default(), |mask, modifier| {
+        mask | match modifier {
+            settings::Modifier::Control => ModMask::CONTROL,
+            settings::Modifier::Alt => ModMask::M1,
+            settings::Modifier::Shift => ModMask::SHIFT,
+            settings::Modifier::Super => ModMask::M4,
+        }
+    })
+}
+
+fn lock_modifier_variants(base: ModMask, num_lock: ModMask) -> Vec<ModMask> {
     let caps_lock = ModMask::LOCK;
     let mut variants = Vec::new();
     for modifier in [
-        ModMask::default(),
-        caps_lock,
-        num_lock,
-        caps_lock | num_lock,
+        base,
+        base | caps_lock,
+        base | num_lock,
+        base | caps_lock | num_lock,
     ] {
         if !variants.contains(&modifier) {
             variants.push(modifier);
@@ -355,7 +402,7 @@ mod tests {
     #[test]
     fn resolves_the_first_matching_keysym_from_a_keyboard_map() {
         assert_eq!(
-            keycode_from_mapping(8, 2, &[0, 0, 0xffc7, 0], F10_KEYSYM),
+            keycode_from_mapping(8, 2, &[0, 0, 0xffc7, 0], 0xffc7),
             Some(9)
         );
     }
@@ -364,12 +411,27 @@ mod tests {
     fn grabs_every_caps_and_num_lock_variant() {
         let num_lock = ModMask::M2;
         assert_eq!(
-            lock_modifier_variants(num_lock),
+            lock_modifier_variants(ModMask::default(), num_lock),
             vec![
                 ModMask::default(),
                 ModMask::LOCK,
                 ModMask::M2,
                 ModMask::LOCK | ModMask::M2,
+            ]
+        );
+    }
+
+    #[test]
+    fn combines_configured_modifiers_with_lock_variants() {
+        let base = modifier_mask(&[settings::Modifier::Control, settings::Modifier::Shift]);
+        assert_eq!(base, ModMask::CONTROL | ModMask::SHIFT);
+        assert_eq!(
+            lock_modifier_variants(base, ModMask::M2),
+            vec![
+                ModMask::CONTROL | ModMask::SHIFT,
+                ModMask::CONTROL | ModMask::SHIFT | ModMask::LOCK,
+                ModMask::CONTROL | ModMask::SHIFT | ModMask::M2,
+                ModMask::CONTROL | ModMask::SHIFT | ModMask::LOCK | ModMask::M2,
             ]
         );
     }

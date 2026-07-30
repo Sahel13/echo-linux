@@ -5,7 +5,7 @@
 - Last completed feature: HOTKEY-001
 - Next eligible feature: HOTKEY-002
 - Build status: passing
-- Known blockers: none
+- Known blockers: HOTKEY-002 needs manual verification in an accessible X11 session.
 
 ## Session log
 
@@ -109,4 +109,14 @@ Append entries; do not rewrite earlier entries.
 - Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; final `scripts/check.sh`.
 - Manual acceptance evidence: User confirmed the HOTKEY-001 manual matrix against the standard F10 backend: Echo receives one press and one final release while another application has focus; Caps Lock and Num Lock combinations work; holding through keyboard repeat does not release early; a keyboard-layout change re-resolves the binding; and a forced grab conflict displays an error without exiting Echo.
 - Known limitations or follow-up: None for HOTKEY-001. ThinkPad-specific `XF86Favorites` binding is deferred to the user-configurable shortcut feature.
+- Next eligible feature: HOTKEY-002
+
+### 2026-07-30 — HOTKEY-002 — custom shortcut capture and live X11 re-grab implemented; manual verification pending
+
+- Agent/session: Codex
+- Commit: this commit (`HOTKEY-002: add custom shortcut capture`)
+- What changed: Added a Change shortcut control that captures a readable non-modifier key plus Ctrl/Alt/Shift/Super modifiers, cancels on Escape, rejects bare modifiers, and persists an accepted binding. The X11 worker now accepts live update commands, resolves the captured keysym, tries the new passive grab before releasing the old one, and retains the old shortcut on a conflict. Captured X11 key names, including ThinkPad `XF86Favorites`, are accepted and reloaded from settings on restart.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-targets --locked`; `xwininfo -root -display "$DISPLAY"`; final `scripts/check.sh`.
+- Manual acceptance evidence: The 20 non-ignored automated tests cover capture naming/modifiers, Escape and bare-modifier rejection, ThinkPad `XF86Favorites` conversion, custom modifier masks, settings reload, and the prior X11 grab/repeat behavior. Manual X11 verification was unavailable because `xwininfo` returned `unable to open display ":0"`.
+- Known limitations or follow-up: Keep `HOTKEY-002` at `passes: false`. In an accessible X11 session: (1) click Change shortcut, capture a non-modifier such as F9, verify its readable name, restart Echo, and confirm it remains shown and active; (2) click Change shortcut, press Escape, then separately press only Ctrl/Shift/Alt/Super and confirm capture cancels or remains pending without changing the saved binding; (3) capture Ctrl+F9 and verify its global press/release while another application has focus; (4) arrange a passive-grab conflict for a new candidate, attempt to capture it, and verify the old shortcut still works; (5) capture the ThinkPad phone-marked key and verify the emitted `XF86Favorites` binding works globally.
 - Next eligible feature: HOTKEY-002

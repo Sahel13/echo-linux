@@ -1,5 +1,11 @@
 use adw::prelude::*;
-use std::{cell::RefCell, rc::Rc, sync::mpsc, thread, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
 mod secret;
 mod settings;
@@ -71,26 +77,40 @@ fn activate(
 
     let backend = gtk::gdk::Display::default().map(|display| display.backend());
     let session = session_support(backend);
+    let (settings_store, settings, settings_error) = load_settings();
+    let settings = Rc::new(RefCell::new(settings));
     let message = gtk::Label::new(Some(status_message(session)));
     message.set_halign(gtk::Align::Start);
     message.set_wrap(true);
     content.append(&message);
 
-    if session == SessionSupport::X11 {
-        let shortcut_status = gtk::Label::new(Some("Starting global F10 shortcut…"));
+    let shortcut_controller = if session == SessionSupport::X11 {
+        let shortcut_status = gtk::Label::new(Some("Starting global shortcut…"));
         shortcut_status.set_halign(gtk::Align::Start);
         shortcut_status.set_wrap(true);
         content.append(&shortcut_status);
-        start_shortcut_backend(shortcut_status);
-    }
+        shortcut::binding_from_settings(&settings.borrow().shortcut)
+            .map(|binding| Rc::new(start_shortcut_backend(binding, shortcut_status)))
+    } else {
+        None
+    };
 
-    if let Some(error_message) = settings_load_error_message() {
+    if let Some(error_message) = settings_error {
         let error = gtk::Label::new(Some(&error_message));
         error.add_css_class("error");
         error.set_halign(gtk::Align::Start);
         error.set_wrap(true);
         content.append(&error);
     }
+
+    let shortcut_binding_label =
+        gtk::Label::new(Some(&shortcut_display(&settings.borrow().shortcut)));
+    shortcut_binding_label.set_halign(gtk::Align::Start);
+    content.append(&shortcut_binding_label);
+    let change_shortcut = gtk::Button::with_label("Change shortcut");
+    change_shortcut.set_halign(gtk::Align::Start);
+    change_shortcut.set_sensitive(shortcut_controller.is_some());
+    content.append(&change_shortcut);
 
     let api_key_status = gtk::Label::new(Some("Checking secure API-key storage…"));
     api_key_status.set_halign(gtk::Align::Start);
@@ -147,6 +167,15 @@ fn activate(
         .default_height(180)
         .content(&content)
         .build();
+
+    install_shortcut_capture(
+        &window,
+        &change_shortcut,
+        &shortcut_binding_label,
+        shortcut_controller,
+        settings_store,
+        settings.clone(),
+    );
 
     window.connect_close_request(|window| {
         window.hide();
@@ -208,9 +237,12 @@ fn secret_operation_message(result: SecretOperationResult) -> &'static str {
     }
 }
 
-fn start_shortcut_backend(status: gtk::Label) {
+fn start_shortcut_backend(
+    binding: shortcut::Binding,
+    status: gtk::Label,
+) -> shortcut::ShortcutController {
     let (sender, receiver) = mpsc::channel();
-    shortcut::start_default_x11(sender);
+    let controller = shortcut::start_x11(binding, sender);
 
     gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
         while let Ok(event) = receiver.try_recv() {
@@ -218,15 +250,16 @@ fn start_shortcut_backend(status: gtk::Label) {
         }
         gtk::glib::ControlFlow::Continue
     });
+    controller
 }
 
 fn shortcut_status_message(event: shortcut::ShortcutEvent) -> &'static str {
     match event {
-        shortcut::ShortcutEvent::Active => "Global F10 shortcut is active.",
-        shortcut::ShortcutEvent::Pressed => "F10 pressed (waiting for release).",
-        shortcut::ShortcutEvent::Released => "F10 released.",
+        shortcut::ShortcutEvent::Active => "Global shortcut is active.",
+        shortcut::ShortcutEvent::Pressed => "Shortcut pressed (waiting for release).",
+        shortcut::ShortcutEvent::Released => "Shortcut released.",
         shortcut::ShortcutEvent::Conflict => {
-            "Couldn't claim F10. Another application is using it; Echo remains open."
+            "Couldn't claim shortcut. Another application is using it; Echo remains open."
         }
         shortcut::ShortcutEvent::Unavailable => {
             "Couldn't start global F10 shortcut. Check your X11 session."
@@ -234,16 +267,113 @@ fn shortcut_status_message(event: shortcut::ShortcutEvent) -> &'static str {
     }
 }
 
-fn settings_load_error_message() -> Option<String> {
-    let result = (|| {
+fn load_settings() -> (
+    Option<settings::SettingsStore>,
+    settings::Settings,
+    Option<String>,
+) {
+    match (|| {
         let store = settings::SettingsStore::for_current_user()?;
         let settings = store.load()?;
-        store.save(&settings)
-    })();
+        store.save(&settings).map(|()| (store, settings))
+    })() {
+        Ok((store, settings)) => (Some(store), settings, None),
+        Err(error) => (
+            None,
+            settings::Settings::default(),
+            Some(format!("Couldn't load settings: {error}")),
+        ),
+    }
+}
 
-    result
-        .err()
-        .map(|error| format!("Couldn't load settings: {error}"))
+fn shortcut_display(shortcut: &settings::Shortcut) -> String {
+    shortcut::binding_from_settings(shortcut)
+        .map(|binding| shortcut::display_name(&binding))
+        .unwrap_or_else(|| shortcut.key.clone())
+}
+
+fn install_shortcut_capture(
+    window: &adw::ApplicationWindow,
+    change_button: &gtk::Button,
+    binding_label: &gtk::Label,
+    controller: Option<Rc<shortcut::ShortcutController>>,
+    store: Option<settings::SettingsStore>,
+    settings: Rc<RefCell<settings::Settings>>,
+) {
+    let Some(controller) = controller else {
+        return;
+    };
+    let capturing = Rc::new(Cell::new(false));
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+    change_button.connect_clicked({
+        let capturing = capturing.clone();
+        let binding_label = binding_label.clone();
+        let window = window.clone();
+        move |_| {
+            capturing.set(true);
+            binding_label.set_text("Press a key…");
+            window.grab_focus();
+        }
+    });
+
+    key_controller.connect_key_pressed({
+        let capturing = capturing.clone();
+        let binding_label = binding_label.clone();
+        let settings = settings.clone();
+        let controller = controller.clone();
+        move |_, key, _, state| {
+            if !capturing.get() {
+                return gtk::glib::Propagation::Proceed;
+            }
+            if key == gtk::gdk::Key::Escape {
+                capturing.set(false);
+                binding_label.set_text(&shortcut_display(&settings.borrow().shortcut));
+                return gtk::glib::Propagation::Stop;
+            }
+            let Some(binding) = shortcut::captured_binding(key, state) else {
+                binding_label.set_text("Press a non-modifier key.");
+                return gtk::glib::Propagation::Stop;
+            };
+            capturing.set(false);
+            binding_label.set_text(&shortcut::display_name(&binding));
+            let result = controller.update(binding.clone());
+            let binding_label = binding_label.clone();
+            let settings = settings.clone();
+            let store = store.clone();
+            gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
+                match result.try_recv() {
+                    Ok(shortcut::UpdateResult::Applied) => {
+                        settings.borrow_mut().shortcut = settings::Shortcut {
+                            key: binding.key.clone(),
+                            modifiers: binding.modifiers.clone(),
+                        };
+                        if let Some(store) = &store {
+                            if store.save(&settings.borrow()).is_err() {
+                                binding_label.set_text("Shortcut active, but couldn't save it.");
+                            }
+                        }
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Ok(shortcut::UpdateResult::Conflict) => {
+                        binding_label
+                            .set_text("Shortcut is already in use; kept the old shortcut.");
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Ok(shortcut::UpdateResult::Unavailable)
+                    | Err(mpsc::TryRecvError::Disconnected) => {
+                        binding_label
+                            .set_text("Couldn't activate shortcut; kept the old shortcut.");
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+                }
+            });
+            gtk::glib::Propagation::Stop
+        }
+    });
+    window.add_controller(key_controller);
 }
 
 #[cfg(test)]
@@ -296,7 +426,7 @@ mod tests {
     fn shortcut_conflict_is_actionable_without_closing_echo() {
         assert_eq!(
             shortcut_status_message(shortcut::ShortcutEvent::Conflict),
-            "Couldn't claim F10. Another application is using it; Echo remains open."
+            "Couldn't claim shortcut. Another application is using it; Echo remains open."
         );
     }
 }
