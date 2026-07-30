@@ -8,6 +8,7 @@ use std::{
 };
 
 mod audio;
+mod groq;
 mod secret;
 mod settings;
 mod shortcut;

@@ -180,3 +180,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: User verified live PipeWire-backed capture from the system default and a selected microphone; the hardware test passed and validated 16 kHz mono 16-bit PCM WAV output. User explicitly accepted the feature as complete, with any later issue to be handled as a bug report.
 - Known limitations or follow-up: The active-recording settings-responsiveness and physical device-loss scenarios will be covered by the later controller workflow and revisited if a bug is reported.
 - Next eligible feature: GROQ-001
+
+### 2026-07-30 — GROQ-001 — Groq multipart transcription client verified
+
+- Agent/session: Codex
+- Commit: pending (`GROQ-001: add Groq transcription client`)
+- What changed: Added the worker-thread-only Groq client using the documented transcription endpoint and a multipart WAV request. It includes the configured model, optional language, trimmed vocabulary plus the selected style exemplar, and JSON response format; successful transcript text is trimmed. A best-effort HEAD prewarm is intentionally independent from the later POST request.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `cargo test --all-targets --locked`; final `scripts/check.sh`; `git diff --check`.
+- Manual acceptance evidence: No manual acceptance is required for this feature. Four local mock-server tests verified the endpoint path and method, bearer authorization, WAV multipart part, model, language, prompt, response format, Auto-detect language omission, whitespace trimming, and recovery from a dropped prewarm connection. The mock server ran only on localhost and made no Groq request.
+- Known limitations or follow-up: Error mapping and secret-safe error-response handling are deferred to GROQ-002. The client is not yet connected to the dictation controller; FLOW-001 will invoke it from a worker thread.
+- Next eligible feature: GROQ-002

@@ -134,7 +134,7 @@
         "Verify surrounding whitespace is trimmed from returned text.",
         "Verify connection prewarm failure does not fail the later transcription."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "GROQ-002",
