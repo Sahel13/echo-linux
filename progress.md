@@ -2,8 +2,8 @@
 
 ## Current state
 
-- Last completed feature: AUDIO-001
-- Next eligible feature: AUDIO-002
+- Last completed feature: STYLE-001
+- Next eligible feature: OVERLAY-001
 - Build status: passing
 - Known blockers: none
 
@@ -270,3 +270,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: On the active X11 session, a window-only capture showed the four controls with the documented defaults. X11 interaction selected both models, both styles, custom vocabulary, and each of the fourteen language entries, checking the isolated settings file after every selection. A restart capture visibly reloaded non-default `whisper-large-v3`, Russian, Lower Case, and `Echo Style Test` vocabulary. The full check passed with 51 tests and three explicitly ignored environment-dependent live tests.
 - Known limitations or follow-up: Keep `STYLE-001` at `passes: false` until the active-transaction snapshot step is manually observed. In an X11 session with a working microphone and a test Groq key, set Lower Case, start a 300+ ms hold, change Style to Normal while recording, speak, and release; the inserted result must still be lowercased. Repeat starting at Normal and switching to Lower Case, expecting the initial Normal behavior. Change model, language, and vocabulary during separate active recordings and use Groq request telemetry from a test account or an approved TLS-capable capture to confirm every request retains the values selected at shortcut press. Do not record API keys, authorization headers, transcript text, or audio in that evidence.
 - Next eligible feature: STYLE-001
+
+### 2026-07-30 — STYLE-001 — active-transaction snapshot removed and feature accepted
+
+- Agent/session: Codex
+- Commit: this commit (`STYLE-001: remove transaction settings snapshot`)
+- What changed: Removed the controller's transaction-wide settings snapshot at the user's direction. Capture now reads the selected microphone when recording starts, and transcription copies the current settings only when dispatching its worker. The user confirmed that changing a style during recording is unsupported, so no active-transaction snapshot behavior is retained or tested.
+- Verification commands: `pwd`; `scripts/bootstrap.sh`; approved baseline `scripts/check.sh`; `rg -n snapshot src/controller.rs`; final `scripts/check.sh`; `git diff --check`.
+- Manual acceptance evidence: The prior STYLE-001 X11 verification exercised and restarted every visible model, language, style, and vocabulary control. Per the user's direction, no mid-recording setting-change test is required.
+- Known limitations or follow-up: None for STYLE-001. Mid-recording setting changes are unsupported and are not guaranteed to apply consistently to the in-flight dictation.
+- Next eligible feature: OVERLAY-001

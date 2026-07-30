@@ -128,7 +128,6 @@ pub struct DictationController {
     status: gtk::Label,
     diagnostic_status: gtk::Label,
     pressed_at: Option<Instant>,
-    snapshot: Option<Settings>,
     recording: Option<Recording>,
     start_receiver: Option<Receiver<Result<Recording, audio::CaptureError>>>,
     finalize_receiver: Option<Receiver<Result<FinalizedRecording, audio::CaptureError>>>,
@@ -171,7 +170,6 @@ impl DictationController {
             status,
             diagnostic_status,
             pressed_at: None,
-            snapshot: None,
             recording: None,
             start_receiver: None,
             finalize_receiver: None,
@@ -250,13 +248,7 @@ impl DictationController {
             id: TRANSACTION_COUNTER.fetch_add(1, Ordering::Relaxed) + 1,
             ..TransactionDiagnostics::default()
         };
-        self.snapshot = Some(self.settings.borrow().clone());
-        let microphone = self
-            .snapshot
-            .as_ref()
-            .expect("settings snapshot set before recording")
-            .microphone
-            .clone();
+        let microphone = self.settings.borrow().microphone.clone();
         self.pressed_at = Some(Instant::now());
         self.release_requested = false;
         self.shortcut.set_recording(true);
@@ -277,7 +269,6 @@ impl DictationController {
         self.pending_transcript = None;
         self.release_requested = false;
         self.pressed_at = None;
-        self.snapshot = None;
         self.remove_temporary_audio();
         self.status.set_text("Recording cancelled.");
         self.report("recording-cancelled");
@@ -381,17 +372,14 @@ impl DictationController {
             self.apply(Event::TranscriptionFailed);
             return;
         };
-        let Some(snapshot) = self.snapshot.clone() else {
-            self.apply(Event::TranscriptionFailed);
-            return;
-        };
+        let settings = self.settings.borrow().clone();
         let (sender, receiver) = mpsc::channel();
         self.diagnostics.transcription_requests += 1;
         self.report("transcription-requested");
         thread::spawn(move || {
             let result = match secret::load_api_key() {
                 Ok(api_key) => groq::GroqClient::new()
-                    .and_then(|client| client.transcribe(&api_key, &path, &snapshot))
+                    .and_then(|client| client.transcribe(&api_key, &path, &settings))
                     .map_err(|error| error.to_string()),
                 Err(_) => Err(
                     "Couldn't access secure API-key storage. Check that your desktop keyring is running."
@@ -496,7 +484,6 @@ impl DictationController {
         self.pending_transcript = None;
         self.pressed_at = None;
         self.release_requested = false;
-        self.snapshot = None;
         self.remove_temporary_audio();
         self.status.set_text(message);
         self.error_deadline = Some(Instant::now() + ERROR_DURATION);
@@ -505,7 +492,6 @@ impl DictationController {
 
     fn complete(&mut self) {
         self.shortcut.set_recording(false);
-        self.snapshot = None;
         self.error_deadline = None;
         self.pending_transcript = None;
         self.remove_temporary_audio();

@@ -190,7 +190,7 @@
         "Verify vocabulary persists and is joined with the style exemplar.",
         "Start recording, change a setting, and verify the active transaction uses its starting snapshot."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "OVERLAY-001",
