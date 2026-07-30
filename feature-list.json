@@ -245,7 +245,7 @@
         "Disable the setting and verify the autostart file is removed.",
         "Move the binary and verify the UI warns or requires retoggling rather than silently writing an invalid path."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "E2E-001",

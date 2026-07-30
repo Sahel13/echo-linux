@@ -8,6 +8,7 @@ use std::{
 };
 
 mod audio;
+mod autostart;
 mod controller;
 mod groq;
 mod history;
@@ -372,6 +373,7 @@ fn install_general_controls(
     store: Option<settings::SettingsStore>,
     settings: Rc<RefCell<settings::Settings>>,
 ) {
+    let autostart = autostart::Autostart::for_current_user().ok();
     let launch_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let launch_label = gtk::Label::with_mnemonic("_Launch at login");
     launch_label.set_halign(gtk::Align::Start);
@@ -384,23 +386,59 @@ fn install_general_controls(
     launch_row.append(&launch_at_login);
     content.append(&launch_row);
 
-    let launch_status = gtk::Label::new(None);
+    let launch_status = gtk::Label::new(if settings.borrow().launch_at_login {
+        Some("Checking launch-at-login entry…")
+    } else {
+        None
+    });
     launch_status.set_halign(gtk::Align::Start);
     launch_status.set_wrap(true);
     content.append(&launch_status);
 
+    if settings.borrow().launch_at_login {
+        match autostart.clone() {
+            Some(autostart) => inspect_launch_at_login(autostart, launch_status.clone()),
+            None => launch_status.set_text("Couldn't inspect launch-at-login entry."),
+        }
+    }
+
+    let updating = Rc::new(Cell::new(false));
     launch_at_login.connect_active_notify({
         let settings = settings.clone();
         let store = store.clone();
         let status = launch_status.clone();
+        let autostart = autostart.clone();
+        let updating = updating.clone();
         move |toggle| {
-            settings.borrow_mut().launch_at_login = toggle.is_active();
-            let Some(store) = store.clone() else {
-                status.set_text("Settings storage is unavailable.");
+            if updating.replace(false) {
+                return;
+            }
+            let previous = settings.borrow().launch_at_login;
+            let desired = toggle.is_active();
+            let (Some(store), Some(autostart)) = (store.clone(), autostart.clone()) else {
+                status.set_text("Launch-at-login storage is unavailable.");
+                updating.set(true);
+                toggle.set_active(previous);
                 return;
             };
-            status.set_text("Saving launch preference…");
-            save_launch_preference(store, settings.clone(), status.clone());
+            toggle.set_sensitive(false);
+            status.set_text(if desired {
+                "Enabling launch at login…"
+            } else {
+                "Disabling launch at login…"
+            });
+            save_launch_preference(
+                store,
+                autostart,
+                LaunchPreferenceUi {
+                    settings: settings.clone(),
+                    toggle: toggle.clone(),
+                    status: status.clone(),
+                    updating: updating.clone(),
+                },
+                previous,
+                desired,
+            );
         }
     });
 
@@ -432,31 +470,92 @@ fn install_general_controls(
     });
 }
 
+#[derive(Clone)]
+struct LaunchPreferenceUi {
+    settings: Rc<RefCell<settings::Settings>>,
+    toggle: gtk::Switch,
+    status: gtk::Label,
+    updating: Rc<Cell<bool>>,
+}
+
 fn save_launch_preference(
     store: settings::SettingsStore,
-    settings: Rc<RefCell<settings::Settings>>,
-    status: gtk::Label,
+    autostart: autostart::Autostart,
+    ui: LaunchPreferenceUi,
+    previous: bool,
+    desired: bool,
 ) {
-    let snapshot = settings.borrow().clone();
+    let mut snapshot = ui.settings.borrow().clone();
+    snapshot.launch_at_login = desired;
     let (sender, receiver) = mpsc::channel();
     let worker_store = store.clone();
     let worker_snapshot = snapshot.clone();
     thread::spawn(move || {
-        let _ = sender.send(worker_store.save(&worker_snapshot));
+        let file_result = if desired {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        };
+        let result = file_result
+            .map_err(|_| ())
+            .and_then(|()| worker_store.save(&worker_snapshot).map_err(|_| ()));
+        if result.is_err() {
+            let _ = if previous {
+                autostart.enable()
+            } else {
+                autostart.disable()
+            };
+        }
+        let _ = sender.send(result);
     });
 
     gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
         match receiver.try_recv() {
             Ok(Ok(())) => {
-                if *settings.borrow() == snapshot {
-                    status.set_text("Launch preference saved.");
+                ui.toggle.set_sensitive(true);
+                *ui.settings.borrow_mut() = snapshot.clone();
+                ui.status.set_text(if desired {
+                    "Echo will launch when you log in."
                 } else {
-                    save_launch_preference(store.clone(), settings.clone(), status.clone());
-                }
+                    "Launch at login is off."
+                });
                 gtk::glib::ControlFlow::Break
             }
             Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                status.set_text("Couldn't save launch preference.");
+                ui.toggle.set_sensitive(true);
+                ui.status.set_text("Couldn't update launch at login.");
+                ui.updating.set(true);
+                ui.toggle.set_active(previous);
+                gtk::glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+        }
+    });
+}
+
+fn inspect_launch_at_login(autostart: autostart::Autostart, status: gtk::Label) {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(autostart.status());
+    });
+    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
+        match receiver.try_recv() {
+            Ok(Ok(autostart::Status::Enabled)) => {
+                status.set_text("Echo will launch when you log in.");
+                gtk::glib::ControlFlow::Break
+            }
+            Ok(Ok(autostart::Status::Missing | autostart::Status::Invalid)) => {
+                status.set_text(
+                    "Launch-at-login entry is missing or invalid — toggle it off and on.",
+                );
+                gtk::glib::ControlFlow::Break
+            }
+            Ok(Ok(autostart::Status::ExecutableChanged)) => {
+                status.set_text("Echo moved — toggle launch at login off and on to update it.");
+                gtk::glib::ControlFlow::Break
+            }
+            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                status.set_text("Couldn't inspect launch-at-login entry.");
                 gtk::glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,

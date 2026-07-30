@@ -2,8 +2,8 @@
 
 ## Current state
 
-- Last completed feature: UI-001
-- Next eligible feature: AUTOSTART-001
+- Last completed feature: AUTOSTART-001
+- Next eligible feature: E2E-001
 - Build status: passing
 - Known blockers: none
 
@@ -310,3 +310,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: Unattended inspection on the active 1920×1170 X11 display captured the standard libadwaita Echo/microphone header and both the top and bottom of the vertically scrollable form. The content remained centered and bounded to 640 pixels at the wide tiled size; labels, status text, dropdowns, entries, actions, and the General switch remained readable. Synthetic Tab traversal advanced through the form and automatically scrolled from the API-key editor to the General actions. Alt+H opened a visible 560×342 `About Echo` dialog containing hold/release, Escape cancellation, and X11 guidance. Alt+L focused the Launch at login switch, Space changed the isolated XDG settings document from `false` to `true`, and Alt+Q exited Echo. The focused contract test covers all five required groups, all required control names, help content, and absence of an engine control; the full suite passed 58 tests with three documented environment-dependent tests ignored.
 - Known limitations or follow-up: The active tiling window manager forced Echo to 1920×1170 and ignored an X11 request to resize it to 480×680, so a second compact-size capture was unavailable. The scroll/clamp behavior was directly visible at the forced wide size, and the initial missing vertical-expansion defect found by that capture was fixed before final verification. The session's AT-SPI bus rejected connections, so a screen-reader tree could not be inspected; keyboard traversal, live mnemonics, explicit GTK accessible labels, and the focused contract test provide unattended evidence instead. Per the user's instruction for this unattended session, these unavailable interactive cases are documented and UI-001 is marked passing.
 - Next eligible feature: AUTOSTART-001
+
+### 2026-07-30 — AUTOSTART-001 — XDG launch-at-login lifecycle completed
+
+- Agent/session: Codex unattended implementation agent
+- Commit: this commit (`AUTOSTART-001: manage XDG autostart entry`)
+- What changed: Added an XDG autostart backend that atomically writes `autostart/io.github.sahel.Echo.desktop` for the absolute current executable and removes it when disabled. The Launch at login switch now updates the desktop entry and persisted setting together on a worker thread, rolls the entry back if settings persistence fails, and prevents overlapping toggle operations. On startup, an enabled preference validates the entry without rewriting it; a missing, invalid, or different executable path produces an actionable retoggle warning.
+- Verification commands: `pwd`; complete reads of `AGENTS.md`, `docs/PORTING_GUIDE.md`, `progress.md`, and `feature-list.json`; `git log -10 --oneline`; `git status --short --branch`; `scripts/bootstrap.sh`; sandbox baseline `scripts/check.sh` (existing localhost mock-server binds denied); approved baseline and final `scripts/check.sh`; `cargo fmt`; `cargo test --locked autostart::tests`; `cargo clippy --all-targets -- -D warnings`; `git diff --check`; `desktop-file-validate` against the generated isolated entry; approved X11 checks using an isolated `XDG_CONFIG_HOME`, `xdotool`, `xwininfo`, and window-only `ffmpeg` captures.
+- Manual acceptance evidence: On the active 1920×1200 X11 display, toggling Launch at login on created a desktop-file-validate-clean entry whose quoted `Exec` exactly matched `/home/sahel/code/echo-linux/target/debug/echo`, and persisted `launch_at_login: true`. After exiting Echo, executing that generated command as a simulated login launch produced exactly one Echo process and one visible Echo window. Launching a copied binary from `/tmp` with the original entry retained visibly showed “Echo moved — toggle launch at login off and on to update it,” and inspection confirmed the entry was not silently rewritten. Toggling the setting off removed the desktop file and persisted `false`. Three focused tests independently cover the XDG location, valid entry creation/removal, and moved-binary detection without rewrite; the full suite passed 61 tests with three documented environment-dependent tests ignored.
+- Known limitations or follow-up: An actual desktop logout/login cycle was unavailable in this unattended session, so the generated entry was exercised by running its exact `Exec` command in the active X11 session rather than restarting the whole session. Per the user's instruction, this unavailable interactive boundary is documented and AUTOSTART-001 is marked passing.
+- Next eligible feature: E2E-001
