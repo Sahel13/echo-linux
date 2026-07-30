@@ -36,7 +36,6 @@ reference only.
 - Paste into the previously focused application.
 - Copy last transcript.
 - Lifetime dictated-word count.
-- Launch at login.
 - Secure Groq API-key storage.
 - Short, useful errors for microphone, network, API, and paste failures.
 
@@ -163,7 +162,6 @@ small, versioned settings file with atomic replacement. Defaults:
 | Style | Normal |
 | Microphone | System default |
 | Vocabulary | Empty |
-| Launch at login | Off |
 | Total words | 0 |
 
 The last transcript is memory-only. Store the Groq key through the desktop
@@ -345,7 +343,7 @@ Use one compact adaptive window with these groups:
 2. Shortcut: current binding and Change action.
 3. Transcription: model, language, style, and custom vocabulary.
 4. Input: microphone.
-5. General: launch at login, copy last transcript, word count, Help, and Quit.
+5. General: copy last transcript, word count, Help, and Quit.
 
 Keep labels and explanations short. Hide engine selection because Groq is the
 only engine. The title bar uses the Echo icon and normal libadwaita controls.
@@ -461,10 +459,10 @@ Build in a clean Ubuntu 22.04 LTS container. Run the test suite there, inspect
 linked libraries with `ldd`, and include the exact runtime package list in
 `README.txt`. Generate a SHA-256 checksum beside the archive.
 
-The archive does not install files automatically. Users extract it and place
-`echo` somewhere on `PATH`. Launch-at-login writes an XDG autostart desktop file
-using the executable's absolute current path and warns the user that moving the
-binary requires toggling the setting again.
+The archive does not install files or configure session startup automatically.
+Users extract it and place `echo` somewhere on `PATH`. Users who want Echo to
+start with their session configure that through their desktop environment,
+window manager, or distribution-specific startup mechanism.
 
 ## 10. Completion criteria
 

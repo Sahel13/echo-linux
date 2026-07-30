@@ -8,7 +8,6 @@ use std::{
 };
 
 mod audio;
-mod autostart;
 mod controller;
 mod groq;
 mod history;
@@ -230,7 +229,7 @@ fn activate(
     install_microphone_selector(&content, settings_store.clone(), settings.clone());
     let (word_count, copy_last_transcript, history_status) =
         install_history_controls(&content, history.clone());
-    install_general_controls(&window, &content, settings_store.clone(), settings.clone());
+    install_general_controls(&window, &content);
 
     if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
         let overlay = overlay::Overlay::new(application);
@@ -288,12 +287,11 @@ const LANGUAGE_CONTROL: &str = "Language";
 const STYLE_CONTROL: &str = "Style";
 const VOCABULARY_CONTROL: &str = "Custom vocabulary";
 const MICROPHONE_CONTROL: &str = "Microphone input";
-const LAUNCH_CONTROL: &str = "Launch at login";
 const COPY_CONTROL: &str = "Copy last transcript";
 const HELP_CONTROL: &str = "Help";
 const QUIT_CONTROL: &str = "Quit";
 #[cfg(test)]
-const UI_CONTROL_NAMES: [&str; 13] = [
+const UI_CONTROL_NAMES: [&str; 12] = [
     API_KEY_CONTROL,
     SAVE_API_KEY_CONTROL,
     REMOVE_API_KEY_CONTROL,
@@ -303,7 +301,6 @@ const UI_CONTROL_NAMES: [&str; 13] = [
     STYLE_CONTROL,
     VOCABULARY_CONTROL,
     MICROPHONE_CONTROL,
-    LAUNCH_CONTROL,
     COPY_CONTROL,
     HELP_CONTROL,
     QUIT_CONTROL,
@@ -359,81 +356,7 @@ fn install_history_controls(
     (word_count, copy, status)
 }
 
-fn install_general_controls(
-    window: &adw::ApplicationWindow,
-    content: &gtk::Box,
-    store: Option<settings::SettingsStore>,
-    settings: Rc<RefCell<settings::Settings>>,
-) {
-    let autostart = autostart::Autostart::for_current_user().ok();
-    let launch_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let launch_label = gtk::Label::with_mnemonic("_Launch at login");
-    launch_label.set_halign(gtk::Align::Start);
-    launch_label.set_hexpand(true);
-    let launch_at_login = gtk::Switch::new();
-    launch_at_login.set_active(settings.borrow().launch_at_login);
-    launch_at_login.update_property(&[gtk::accessible::Property::Label(LAUNCH_CONTROL)]);
-    launch_label.set_mnemonic_widget(Some(&launch_at_login));
-    launch_row.append(&launch_label);
-    launch_row.append(&launch_at_login);
-    content.append(&launch_row);
-
-    let launch_status = gtk::Label::new(if settings.borrow().launch_at_login {
-        Some("Checking launch-at-login entry…")
-    } else {
-        None
-    });
-    launch_status.set_halign(gtk::Align::Start);
-    launch_status.set_wrap(true);
-    content.append(&launch_status);
-
-    if settings.borrow().launch_at_login {
-        match autostart.clone() {
-            Some(autostart) => inspect_launch_at_login(autostart, launch_status.clone()),
-            None => launch_status.set_text("Couldn't inspect launch-at-login entry."),
-        }
-    }
-
-    let updating = Rc::new(Cell::new(false));
-    launch_at_login.connect_active_notify({
-        let settings = settings.clone();
-        let store = store.clone();
-        let status = launch_status.clone();
-        let autostart = autostart.clone();
-        let updating = updating.clone();
-        move |toggle| {
-            if updating.replace(false) {
-                return;
-            }
-            let previous = settings.borrow().launch_at_login;
-            let desired = toggle.is_active();
-            let (Some(store), Some(autostart)) = (store.clone(), autostart.clone()) else {
-                status.set_text("Launch-at-login storage is unavailable.");
-                updating.set(true);
-                toggle.set_active(previous);
-                return;
-            };
-            toggle.set_sensitive(false);
-            status.set_text(if desired {
-                "Enabling launch at login…"
-            } else {
-                "Disabling launch at login…"
-            });
-            save_launch_preference(
-                store,
-                autostart,
-                LaunchPreferenceUi {
-                    settings: settings.clone(),
-                    toggle: toggle.clone(),
-                    status: status.clone(),
-                    updating: updating.clone(),
-                },
-                previous,
-                desired,
-            );
-        }
-    });
-
+fn install_general_controls(window: &adw::ApplicationWindow, content: &gtk::Box) {
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let help = gtk::Button::with_mnemonic("_Help");
     help.update_property(&[gtk::accessible::Property::Label(HELP_CONTROL)]);
@@ -458,99 +381,6 @@ fn install_general_controls(
                 .license_type(gtk::License::MitX11)
                 .build();
             dialog.present();
-        }
-    });
-}
-
-#[derive(Clone)]
-struct LaunchPreferenceUi {
-    settings: Rc<RefCell<settings::Settings>>,
-    toggle: gtk::Switch,
-    status: gtk::Label,
-    updating: Rc<Cell<bool>>,
-}
-
-fn save_launch_preference(
-    store: settings::SettingsStore,
-    autostart: autostart::Autostart,
-    ui: LaunchPreferenceUi,
-    previous: bool,
-    desired: bool,
-) {
-    let mut snapshot = ui.settings.borrow().clone();
-    snapshot.launch_at_login = desired;
-    let (sender, receiver) = mpsc::channel();
-    let worker_store = store.clone();
-    let worker_snapshot = snapshot.clone();
-    thread::spawn(move || {
-        let file_result = if desired {
-            autostart.enable()
-        } else {
-            autostart.disable()
-        };
-        let result = file_result
-            .map_err(|_| ())
-            .and_then(|()| worker_store.save(&worker_snapshot).map_err(|_| ()));
-        if result.is_err() {
-            let _ = if previous {
-                autostart.enable()
-            } else {
-                autostart.disable()
-            };
-        }
-        let _ = sender.send(result);
-    });
-
-    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
-        match receiver.try_recv() {
-            Ok(Ok(())) => {
-                ui.toggle.set_sensitive(true);
-                *ui.settings.borrow_mut() = snapshot.clone();
-                ui.status.set_text(if desired {
-                    "Echo will launch when you log in."
-                } else {
-                    "Launch at login is off."
-                });
-                gtk::glib::ControlFlow::Break
-            }
-            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                ui.toggle.set_sensitive(true);
-                ui.status.set_text("Couldn't update launch at login.");
-                ui.updating.set(true);
-                ui.toggle.set_active(previous);
-                gtk::glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
-        }
-    });
-}
-
-fn inspect_launch_at_login(autostart: autostart::Autostart, status: gtk::Label) {
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = sender.send(autostart.status());
-    });
-    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
-        match receiver.try_recv() {
-            Ok(Ok(autostart::Status::Enabled)) => {
-                status.set_text("Echo will launch when you log in.");
-                gtk::glib::ControlFlow::Break
-            }
-            Ok(Ok(autostart::Status::Missing | autostart::Status::Invalid)) => {
-                status.set_text(
-                    "Launch-at-login entry is missing or invalid — toggle it off and on.",
-                );
-                gtk::glib::ControlFlow::Break
-            }
-            Ok(Ok(autostart::Status::ExecutableChanged)) => {
-                status.set_text("Echo moved — toggle launch at login off and on to update it.");
-                gtk::glib::ControlFlow::Break
-            }
-            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                status.set_text("Couldn't inspect launch-at-login entry.");
-                gtk::glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
         }
     });
 }
@@ -1209,7 +1039,6 @@ mod tests {
                 "Style",
                 "Custom vocabulary",
                 "Microphone input",
-                "Launch at login",
                 "Copy last transcript",
                 "Help",
                 "Quit",

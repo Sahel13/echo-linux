@@ -21,7 +21,6 @@ pub struct Settings {
     pub style: Style,
     pub microphone: Microphone,
     pub vocabulary: String,
-    pub launch_at_login: bool,
     pub total_words: u64,
 }
 
@@ -34,7 +33,6 @@ impl Default for Settings {
             style: Style::Normal,
             microphone: Microphone::SystemDefault,
             vocabulary: String::new(),
-            launch_at_login: false,
             total_words: 0,
         }
     }
@@ -354,7 +352,6 @@ mod tests {
                 id: "test-device".into(),
             },
             vocabulary: "Echo, Groq".into(),
-            launch_at_login: true,
             total_words: 42,
         }
     }
@@ -373,7 +370,6 @@ mod tests {
                 style: Style::Normal,
                 microphone: Microphone::SystemDefault,
                 vocabulary: String::new(),
-                launch_at_login: false,
                 total_words: 0,
             }
         );
@@ -438,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_file_never_contains_api_key_or_transcript() {
+    fn saved_file_contains_neither_private_nor_removed_fields() {
         let path = temporary_settings_path();
         let store = SettingsStore::at(path.clone());
         let settings = changed_settings();
@@ -447,6 +443,36 @@ mod tests {
         let contents = fs::read_to_string(&path).expect("settings file is readable");
         assert!(!contents.contains("api_key"));
         assert!(!contents.contains("transcript"));
+        assert!(!contents.contains("launch_at_login"));
+
+        fs::remove_dir_all(path.parent().expect("settings parent directory"))
+            .expect("test settings directory removal succeeds");
+    }
+
+    #[test]
+    fn legacy_launch_at_login_field_is_ignored_and_not_rewritten() {
+        let path = temporary_settings_path();
+        let store = SettingsStore::at(path.clone());
+        let legacy = br#"{
+  "version": 1,
+  "shortcut": {"key": "F10", "modifiers": []},
+  "model": "whisper-large-v3-turbo",
+  "language": "en",
+  "style": "Normal",
+  "microphone": "system_default",
+  "vocabulary": "",
+  "launch_at_login": true,
+  "total_words": 0
+}"#;
+        fs::create_dir_all(path.parent().expect("settings parent directory"))
+            .expect("test settings directory creation succeeds");
+        fs::write(&path, legacy).expect("legacy settings write succeeds");
+
+        let settings = store.load().expect("legacy settings remain readable");
+        store.save(&settings).expect("settings rewrite succeeds");
+
+        let contents = fs::read_to_string(&path).expect("settings file is readable");
+        assert!(!contents.contains("launch_at_login"));
 
         fs::remove_dir_all(path.parent().expect("settings parent directory"))
             .expect("test settings directory removal succeeds");

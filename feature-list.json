@@ -235,23 +235,10 @@
       "passes": true
     },
     {
-      "id": "AUTOSTART-001",
-      "category": "desktop",
-      "description": "Launch at login is controlled by an XDG autostart desktop file tied to the current executable path.",
-      "depends_on": ["SET-001", "APP-001"],
-      "acceptance_steps": [
-        "Enable launch at login and inspect a valid desktop file under the XDG autostart directory.",
-        "Log into a test X11 session and verify Echo starts once.",
-        "Disable the setting and verify the autostart file is removed.",
-        "Move the binary and verify the UI warns or requires retoggling rather than silently writing an invalid path."
-      ],
-      "passes": true
-    },
-    {
       "id": "E2E-001",
       "category": "quality",
       "description": "The complete dictation workflow passes the documented X11 manual matrix and a clean-checkout automated suite.",
-      "depends_on": ["OVERLAY-001", "UI-001", "AUTOSTART-001"],
+      "depends_on": ["OVERLAY-001", "UI-001"],
       "acceptance_steps": [
         "Run scripts/bootstrap.sh and scripts/check.sh from a clean checkout.",
         "Record dated evidence for every manual X11 acceptance case in the porting guide.",
