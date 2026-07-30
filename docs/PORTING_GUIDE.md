@@ -134,11 +134,16 @@ in the focused application. Release that grab on every exit path.
 
 ### Paste semantics
 
-The first X11 implementation uses the clipboard plus XTEST-generated `Ctrl+V`:
+The first X11 implementation uses the clipboard plus a target-appropriate paste
+action:
 
 1. Snapshot the current text clipboard when readable.
 2. Set the transcript as clipboard text.
-3. Generate `Ctrl+V` in the application that retained focus.
+3. Generate `Ctrl+V` in an ordinary application. For terminal emulators, use a
+   terminal paste action; Echo invokes the focused Ghostty window's scoped GTK
+   paste action and recognized terminals without one receive `Ctrl+Shift+V`.
+   This keeps terminal applications such as Vim and Codex from receiving a
+   literal `Ctrl+V`.
 4. Wait briefly for the target to consume it.
 5. Restore the prior text clipboard only if no other process changed the
    clipboard in the meantime.
