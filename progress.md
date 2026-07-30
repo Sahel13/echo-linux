@@ -150,3 +150,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: User confirmed that the Input selector lists System Default and connected microphones; a selected microphone persists after restart; disconnecting it returns the selector to System Default with a clear UI update; and reconnecting a microphone refreshes the list without restarting Echo.
 - Known limitations or follow-up: None for AUDIO-001.
 - Next eligible feature: AUDIO-002
+
+### 2026-07-30 — AUDIO-002 — asynchronous WAV capture backend implemented; manual verification pending
+
+- Agent/session: Codex
+- Commit: this commit (`AUDIO-002: add WAV capture backend`)
+- What changed: Added worker-owned CPAL capture for the system default or selected microphone. Callbacks only convert, downmix, resample, and copy samples; finalization writes 16 kHz mono 16-bit PCM WAV data on the capture worker. Device-stream errors are surfaced as a clean capture failure, and every new capture gets independent state. Added the `hound` WAV dependency and focused conversion, resampling, metadata, recovery, and opt-in live-device tests.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `cargo test --locked`; `scripts/check.sh`; `git diff --check`; `pactl list short sources`; `timeout 5s target/debug/echo`; `cargo test --locked audio::tests::live_default_and_selected_microphones_finalize_valid_wavs -- --ignored`.
+- Manual acceptance evidence: Automated tests pass for mono integer conversion, stereo float downmixing, 48 kHz resampling, 16 kHz/mono/16-bit PCM WAV headers, and fresh capture state after simulated device loss. Live verification was unavailable: PulseAudio rejected the sandbox connection, `pactl` reported no accessible sources, the ignored live-device test found no connected microphone, and GTK could not open `DISPLAY=:0`.
+- Known limitations or follow-up: Keep `AUDIO-002` at `passes: false`. On an accessible X11 desktop with a default input and a second microphone, run `cargo test --locked audio::tests::live_default_and_selected_microphones_finalize_valid_wavs -- --ignored` and inspect the resulting checks for both capture paths. Then use the later FLOW-001 recording control to verify the settings window stays responsive during capture, unplug an active microphone, confirm a clean failure, and immediately start a new recording successfully.
+- Next eligible feature: AUDIO-002

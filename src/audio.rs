@@ -1,6 +1,24 @@
+#![allow(dead_code)] // FLOW-001 wires this AUDIO-002 backend to dictation events.
+
 use crate::settings::Microphone;
-use cpal::traits::{DeviceTrait, HostTrait};
-use std::collections::HashSet;
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    SampleFormat, Stream,
+};
+use std::{
+    collections::HashSet,
+    fmt,
+    path::PathBuf,
+    sync::{
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    },
+    thread,
+};
+
+const TARGET_SAMPLE_RATE: u32 = 16_000;
+const TARGET_CHANNELS: u16 = 1;
+const TARGET_BITS_PER_SAMPLE: u16 = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InputDevice {
@@ -10,6 +28,281 @@ pub struct InputDevice {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeviceListError;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureError {
+    NoInputDevice,
+    SelectedDeviceUnavailable,
+    UnsupportedSampleFormat,
+    StartFailed,
+    DeviceLost,
+    FinalizeFailed,
+}
+
+impl fmt::Display for CaptureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NoInputDevice => "No microphone is available.",
+            Self::SelectedDeviceUnavailable => "The selected microphone is no longer available.",
+            Self::UnsupportedSampleFormat => "The selected microphone uses an unsupported format.",
+            Self::StartFailed => "Couldn't start microphone recording.",
+            Self::DeviceLost => "Microphone recording stopped unexpectedly.",
+            Self::FinalizeFailed => "Couldn't finalize microphone recording.",
+        })
+    }
+}
+
+impl std::error::Error for CaptureError {}
+
+/// Metadata for a completed WAV file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinalizedRecording {
+    pub path: PathBuf,
+    pub frames: usize,
+}
+
+/// A running CPAL capture. Its callback only converts and copies samples into
+/// memory; WAV writing is deferred to [`Recording::finish`].
+pub struct Recording {
+    command_sender: mpsc::Sender<CaptureCommand>,
+}
+
+impl Recording {
+    /// Stop capture and write a 16 kHz mono 16-bit PCM WAV on a worker thread.
+    /// The returned receiver can be polled from the GTK main loop without
+    /// blocking it.
+    pub fn finish(self, path: PathBuf) -> Receiver<Result<FinalizedRecording, CaptureError>> {
+        let (sender, receiver) = mpsc::channel();
+        if self
+            .command_sender
+            .send(CaptureCommand::Finalize(path, sender.clone()))
+            .is_err()
+        {
+            let _ = sender.send(Err(CaptureError::DeviceLost));
+        }
+        receiver
+    }
+}
+
+enum CaptureCommand {
+    Finalize(
+        PathBuf,
+        mpsc::Sender<Result<FinalizedRecording, CaptureError>>,
+    ),
+}
+
+/// Start microphone capture on a worker thread. The receiver delivers an
+/// active [`Recording`] only after the input stream is running.
+pub fn start_recording(selection: Microphone) -> Receiver<Result<Recording, CaptureError>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = create_input_stream(&selection).map(|(stream, captured)| {
+            let (command_sender, command_receiver) = mpsc::channel();
+            (
+                Recording { command_sender },
+                stream,
+                captured,
+                command_receiver,
+            )
+        });
+        match result {
+            Ok((recording, stream, captured, command_receiver)) => {
+                if sender.send(Ok(recording)).is_err() {
+                    return;
+                }
+                if let Ok(CaptureCommand::Finalize(path, result_sender)) = command_receiver.recv() {
+                    drop(stream);
+                    let result = captured
+                        .lock()
+                        .map_err(|_| CaptureError::FinalizeFailed)
+                        .and_then(|captured| {
+                            if captured.device_lost {
+                                Err(CaptureError::DeviceLost)
+                            } else {
+                                write_wav(path, &captured.samples)
+                            }
+                        });
+                    let _ = result_sender.send(result);
+                }
+            }
+            Err(error) => {
+                let _ = sender.send(Err(error));
+            }
+        }
+    });
+    receiver
+}
+
+fn create_input_stream(
+    selection: &Microphone,
+) -> Result<(Stream, Arc<Mutex<CapturedAudio>>), CaptureError> {
+    let device = selected_input_device(selection)?;
+    let supported_config = device
+        .default_input_config()
+        .map_err(|_| CaptureError::StartFailed)?;
+    let config = supported_config.config();
+    let captured = Arc::new(Mutex::new(CapturedAudio::new(
+        config.sample_rate.0,
+        config.channels,
+    )?));
+    let failed_capture = captured.clone();
+    let error_callback = move |_| {
+        if let Ok(mut captured) = failed_capture.lock() {
+            captured.device_lost = true;
+        }
+    };
+
+    let stream = match supported_config.sample_format() {
+        SampleFormat::I8 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            i8_to_i16,
+        ),
+        SampleFormat::I16 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            i16_to_i16,
+        ),
+        SampleFormat::I32 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            i32_to_i16,
+        ),
+        SampleFormat::I64 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            i64_to_i16,
+        ),
+        SampleFormat::U8 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            u8_to_i16,
+        ),
+        SampleFormat::U16 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            u16_to_i16,
+        ),
+        SampleFormat::U32 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            u32_to_i16,
+        ),
+        SampleFormat::U64 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            u64_to_i16,
+        ),
+        SampleFormat::F32 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            float_to_i16,
+        ),
+        SampleFormat::F64 => build_stream(
+            &device,
+            &config,
+            captured.clone(),
+            error_callback,
+            f64_to_i16,
+        ),
+        _ => return Err(CaptureError::UnsupportedSampleFormat),
+    }
+    .map_err(|_| CaptureError::StartFailed)?;
+    stream.play().map_err(|_| CaptureError::StartFailed)?;
+
+    Ok((stream, captured))
+}
+
+fn build_stream<T: cpal::SizedSample + Send + 'static>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    captured: Arc<Mutex<CapturedAudio>>,
+    error_callback: impl FnMut(cpal::StreamError) + Send + 'static,
+    convert: impl Fn(T) -> i16 + Send + 'static,
+) -> Result<Stream, cpal::BuildStreamError> {
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            if let Ok(mut captured) = captured.lock() {
+                captured.append_interleaved(data.iter().copied().map(&convert));
+            }
+        },
+        error_callback,
+        None,
+    )
+}
+
+fn selected_input_device(selection: &Microphone) -> Result<cpal::Device, CaptureError> {
+    let host = cpal::default_host();
+    match selection {
+        Microphone::SystemDefault => host
+            .default_input_device()
+            .ok_or(CaptureError::NoInputDevice),
+        Microphone::Device { id } => host
+            .input_devices()
+            .map_err(|_| CaptureError::NoInputDevice)?
+            .find(|device| device.name().ok().as_deref() == Some(id))
+            .ok_or(CaptureError::SelectedDeviceUnavailable),
+    }
+}
+
+fn float_to_i16(value: f32) -> i16 {
+    (value.clamp(-1.0, 1.0) * 32_767.0).round() as i16
+}
+
+fn i8_to_i16(value: i8) -> i16 {
+    i16::from(value) << 8
+}
+
+fn i16_to_i16(value: i16) -> i16 {
+    value
+}
+
+fn i32_to_i16(value: i32) -> i16 {
+    (value >> 16) as i16
+}
+
+fn i64_to_i16(value: i64) -> i16 {
+    (value >> 48) as i16
+}
+
+fn u8_to_i16(value: u8) -> i16 {
+    (i16::from(value) - 128) << 8
+}
+
+fn u16_to_i16(value: u16) -> i16 {
+    (i32::from(value) - 32_768) as i16
+}
+
+fn u32_to_i16(value: u32) -> i16 {
+    ((i64::from(value) - 2_147_483_648) >> 16) as i16
+}
+
+fn u64_to_i16(value: u64) -> i16 {
+    ((value as i128 - 9_223_372_036_854_775_808_i128) >> 48) as i16
+}
+
+fn f64_to_i16(value: f64) -> i16 {
+    float_to_i16(value as f32)
+}
 
 /// Enumerate the inputs that are available from the active audio host.
 ///
@@ -54,9 +347,75 @@ pub fn reconcile_selection(selection: &Microphone, devices: &[InputDevice]) -> (
     }
 }
 
+struct CapturedAudio {
+    samples: Vec<i16>,
+    sample_rate: u32,
+    channels: usize,
+    output_rate_remainder: u32,
+    device_lost: bool,
+}
+
+impl CapturedAudio {
+    fn new(sample_rate: u32, channels: u16) -> Result<Self, CaptureError> {
+        if sample_rate == 0 || channels == 0 {
+            return Err(CaptureError::UnsupportedSampleFormat);
+        }
+        Ok(Self {
+            samples: Vec::new(),
+            sample_rate,
+            channels: usize::from(channels),
+            output_rate_remainder: 0,
+            device_lost: false,
+        })
+    }
+
+    fn append_interleaved(&mut self, samples: impl IntoIterator<Item = i16>) {
+        let mut samples = samples.into_iter();
+        loop {
+            let mut total = 0_i32;
+            for _ in 0..self.channels {
+                let Some(sample) = samples.next() else {
+                    return;
+                };
+                total += i32::from(sample);
+            }
+            let mono = (total / self.channels as i32) as i16;
+            self.output_rate_remainder += TARGET_SAMPLE_RATE;
+            while self.output_rate_remainder >= self.sample_rate {
+                self.samples.push(mono);
+                self.output_rate_remainder -= self.sample_rate;
+            }
+        }
+    }
+}
+
+fn write_wav(path: PathBuf, samples: &[i16]) -> Result<FinalizedRecording, CaptureError> {
+    let spec = hound::WavSpec {
+        channels: TARGET_CHANNELS,
+        sample_rate: TARGET_SAMPLE_RATE,
+        bits_per_sample: TARGET_BITS_PER_SAMPLE,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer =
+        hound::WavWriter::create(&path, spec).map_err(|_| CaptureError::FinalizeFailed)?;
+    for sample in samples {
+        writer
+            .write_sample(*sample)
+            .map_err(|_| CaptureError::FinalizeFailed)?;
+    }
+    writer
+        .finalize()
+        .map_err(|_| CaptureError::FinalizeFailed)?;
+    Ok(FinalizedRecording {
+        path,
+        frames: samples.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn devices() -> Vec<InputDevice> {
         vec![
@@ -101,5 +460,90 @@ mod tests {
             reconcile_selection(&selection, &connected),
             (Microphone::SystemDefault, true)
         );
+    }
+
+    #[test]
+    fn converts_mono_integer_samples_to_pcm() {
+        let mut captured = CapturedAudio::new(TARGET_SAMPLE_RATE, 1).unwrap();
+        captured.append_interleaved([i16::MIN, 0, i16::MAX]);
+        assert_eq!(captured.samples, [i16::MIN, 0, i16::MAX]);
+    }
+
+    #[test]
+    fn downmixes_stereo_float_samples_to_pcm() {
+        let mut captured = CapturedAudio::new(TARGET_SAMPLE_RATE, 2).unwrap();
+        captured.append_interleaved([float_to_i16(1.0), float_to_i16(-1.0)]);
+        assert_eq!(captured.samples, [0]);
+    }
+
+    #[test]
+    fn resamples_native_audio_to_sixteen_khz() {
+        let mut captured = CapturedAudio::new(48_000, 1).unwrap();
+        captured.append_interleaved(std::iter::repeat_n(1_000, 48_000));
+        assert_eq!(captured.samples.len(), 16_000);
+    }
+
+    #[test]
+    fn finalizes_a_valid_sixteen_khz_mono_pcm_wav() {
+        let path = temporary_wav_path();
+        let recording = write_wav(path.clone(), &[1, -2, 3]).unwrap();
+        let reader = hound::WavReader::open(&path).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.sample_rate, TARGET_SAMPLE_RATE);
+        assert_eq!(spec.channels, TARGET_CHANNELS);
+        assert_eq!(spec.bits_per_sample, TARGET_BITS_PER_SAMPLE);
+        assert_eq!(spec.sample_format, hound::SampleFormat::Int);
+        assert_eq!(recording.frames, 3);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn device_loss_does_not_poison_a_new_capture_buffer() {
+        let mut failed = CapturedAudio::new(TARGET_SAMPLE_RATE, 1).unwrap();
+        failed.device_lost = true;
+        assert!(failed.device_lost);
+        let next = CapturedAudio::new(TARGET_SAMPLE_RATE, 1).unwrap();
+        assert!(!next.device_lost);
+    }
+
+    #[test]
+    #[ignore = "requires an accessible default and selected microphone"]
+    fn live_default_and_selected_microphones_finalize_valid_wavs() {
+        let devices = list_input_devices().expect("list connected microphones");
+        let selected = devices
+            .first()
+            .expect("at least one connected microphone")
+            .id
+            .clone();
+
+        for selection in [
+            Microphone::SystemDefault,
+            Microphone::Device { id: selected },
+        ] {
+            let recording = start_recording(selection)
+                .recv_timeout(Duration::from_secs(5))
+                .expect("start worker response")
+                .expect("start microphone recording");
+            std::thread::sleep(Duration::from_millis(500));
+            let path = temporary_wav_path();
+            let finalized = recording
+                .finish(path.clone())
+                .recv_timeout(Duration::from_secs(5))
+                .expect("finalize worker response")
+                .expect("finalize microphone recording");
+            let reader = hound::WavReader::open(&finalized.path).expect("open finalized WAV");
+            assert_eq!(reader.spec().sample_rate, TARGET_SAMPLE_RATE);
+            assert_eq!(reader.spec().channels, TARGET_CHANNELS);
+            assert_eq!(reader.spec().bits_per_sample, TARGET_BITS_PER_SAMPLE);
+            std::fs::remove_file(path).expect("remove temporary WAV");
+        }
+    }
+
+    fn temporary_wav_path() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("echo-audio-{unique}.wav"))
     }
 }
