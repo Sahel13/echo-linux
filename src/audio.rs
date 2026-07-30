@@ -59,7 +59,6 @@ impl std::error::Error for CaptureError {}
 pub struct FinalizedRecording {
     pub path: PathBuf,
     pub frames: usize,
-    pub average_amplitude: u16,
 }
 
 /// A running CPAL capture. Its callback only converts and copies samples into
@@ -410,20 +409,7 @@ fn write_wav(path: PathBuf, samples: &[i16]) -> Result<FinalizedRecording, Captu
     Ok(FinalizedRecording {
         path,
         frames: samples.len(),
-        average_amplitude: average_amplitude(samples),
     })
-}
-
-fn average_amplitude(samples: &[i16]) -> u16 {
-    if samples.is_empty() {
-        return 0;
-    }
-    let total = samples
-        .iter()
-        .map(|sample| u64::from(i32::from(*sample).unsigned_abs()))
-        .sum::<u64>();
-    u16::try_from(total / u64::try_from(samples.len()).expect("sample length fits u64"))
-        .unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
@@ -508,15 +494,7 @@ mod tests {
         assert_eq!(spec.bits_per_sample, TARGET_BITS_PER_SAMPLE);
         assert_eq!(spec.sample_format, hound::SampleFormat::Int);
         assert_eq!(recording.frames, 3);
-        assert_eq!(recording.average_amplitude, 2);
         std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn measures_silence_without_retaining_audio() {
-        assert_eq!(average_amplitude(&[0, 0, 0]), 0);
-        assert_eq!(average_amplitude(&[-600, 600]), 600);
-        assert_eq!(average_amplitude(&[i16::MIN, i16::MAX]), 32_767);
     }
 
     #[test]

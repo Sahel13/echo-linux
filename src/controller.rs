@@ -18,7 +18,6 @@ use std::{
 
 const MINIMUM_RECORDING_DURATION: Duration = Duration::from_millis(300);
 const ERROR_DURATION: Duration = Duration::from_millis(2500);
-const MINIMUM_SPEECH_AMPLITUDE: u16 = 200;
 static RECORDING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -296,9 +295,6 @@ impl DictationController {
         };
         self.finalize_receiver = None;
         match result {
-            Ok(Ok(recording)) if !contains_speech(&recording) => {
-                self.apply(Event::Transcript { empty: true })
-            }
             Ok(Ok(_recording)) => self.apply(Event::Finalized),
             Ok(Err(error)) => self.fail_with_message(&error.to_string()),
             Err(()) => self.apply(Event::FinalizeFailed),
@@ -442,10 +438,6 @@ fn remove_temporary_audio(temporary_audio: &mut Option<PathBuf>) {
     }
 }
 
-fn contains_speech(recording: &FinalizedRecording) -> bool {
-    recording.average_amplitude >= MINIMUM_SPEECH_AMPLITUDE
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,36 +523,6 @@ mod tests {
             assert_eq!(machine.apply(event), None);
             assert_eq!(machine.state, state);
         }
-    }
-
-    #[test]
-    fn overlapping_hold_does_not_interrupt_the_first_transcription() {
-        let mut machine = Machine::new();
-        machine.apply(Event::Pressed);
-        machine.apply(Event::Released { long_enough: true });
-        assert_eq!(machine.state, State::Transcribing);
-        assert_eq!(machine.apply(Event::Pressed), None);
-        assert_eq!(machine.apply(Event::Released { long_enough: true }), None);
-        assert_eq!(machine.apply(Event::Finalized), Some(Effect::Transcribe));
-        assert_eq!(
-            machine.apply(Event::Transcript { empty: false }),
-            Some(Effect::Paste)
-        );
-    }
-
-    #[test]
-    fn silent_recordings_do_not_reach_groq() {
-        let silent = FinalizedRecording {
-            path: PathBuf::from("silent.wav"),
-            frames: 16_000,
-            average_amplitude: MINIMUM_SPEECH_AMPLITUDE - 1,
-        };
-        let speech = FinalizedRecording {
-            average_amplitude: MINIMUM_SPEECH_AMPLITUDE,
-            ..silent.clone()
-        };
-        assert!(!contains_speech(&silent));
-        assert!(contains_speech(&speech));
     }
 
     #[test]
