@@ -65,7 +65,7 @@
         "Inspect configuration, logs, process arguments, and environment output and verify the key is absent.",
         "Stop the Secret Service and verify Echo shows an actionable storage error."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "HOTKEY-001",

@@ -2,10 +2,10 @@
 
 ## Current state
 
-- Last completed feature: SET-001
-- Next eligible feature: KEY-001
+- Last completed feature: KEY-001
+- Next eligible feature: HOTKEY-001
 - Build status: passing
-- Known blockers: KEY-001 needs manual GTK verification on an accessible desktop session.
+- Known blockers: none
 
 ## Session log
 
@@ -80,3 +80,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: The dedicated real-service test passed against the active desktop Secret Service, proving save, a fresh-store status lookup, replacement, and removal using a separate `key-001-test-groq-api-key` account. The GTK window was launched on X11, but this harness cannot inject keyboard input or inspect rendered label text, so the UI acceptance steps were not claimed as manual evidence.
 - Known limitations or follow-up: Keep `KEY-001` at `passes: false`. On an accessible X11 desktop with the normal keyring running, enter a disposable key in Echo’s password entry and save it; verify the status says a key is saved while the entry remains empty. Quit and relaunch Echo, verify saved status persists, replace it, then remove it. Inspect Echo’s XDG settings file, application logs, process arguments, and environment output to verify the disposable key is absent. Finally stop the desktop Secret Service, launch or refresh Echo, and verify the actionable secure-storage error appears. Report those observations before marking the feature passing.
 - Next eligible feature: KEY-001
+
+### 2026-07-30 — KEY-001 — API-key storage manually verified
+
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: this commit (`KEY-001: record manual verification`)
+- What changed: Marked the completed Secret Service API-key feature passing; no application code changed in this session.
+- Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`; value-free inspection of the XDG settings schema, Echo user-journal line count, live Echo process count, and temporary application log size.
+- Manual acceptance evidence: User confirmed saving a disposable key reports saved without displaying it, status persists after restart, replacement and removal succeed, and stopping Secret Service displays the actionable storage error. The settings file contains only `version`, documented non-secret settings fields, and no `api_key` or `transcript` field. Echo had zero user-journal lines, no live process after the verification session, and a zero-byte temporary launch log; no key value was printed during inspection.
+- Known limitations or follow-up: None for KEY-001.
+- Next eligible feature: HOTKEY-001
