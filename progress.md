@@ -2,8 +2,8 @@
 
 ## Current state
 
-- Last completed feature: STYLE-001
-- Next eligible feature: OVERLAY-001
+- Last completed feature: OVERLAY-001
+- Next eligible feature: HISTORY-001
 - Build status: passing
 - Known blockers: none
 
@@ -280,3 +280,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: The prior STYLE-001 X11 verification exercised and restarted every visible model, language, style, and vocabulary control. Per the user's direction, no mid-recording setting-change test is required.
 - Known limitations or follow-up: None for STYLE-001. Mid-recording setting changes are unsupported and are not guaranteed to apply consistently to the in-flight dictation.
 - Next eligible feature: OVERLAY-001
+
+### 2026-07-30 — OVERLAY-001 — non-interactive X11 dictation overlay implemented
+
+- Agent/session: Codex
+- Commit: this commit (`OVERLAY-001: add X11 dictation overlay`)
+- What changed: Added a GTK-main-thread overlay driven directly by the dictation controller. Recording uses a red pulse, transcribing uses a faster neutral pulse, and errors use a single ellipsized line before the controller's existing 2.5-second timeout hides the window. The X11 surface is transparent, override-redirect, pointer-transparent, non-focusable, always above, sticky, and excluded from task switchers and pagers. Placement selects the monitor containing the focused X11 window, then falls back to the pointer or first monitor, and positions the overlay at bottom center.
+- Verification commands: `pwd`; complete reads of `AGENTS.md`, `docs/PORTING_GUIDE.md`, `progress.md`, and `feature-list.json`; `git log -10 --oneline`; `git status --short --branch`; `scripts/bootstrap.sh`; initial sandbox `scripts/check.sh` (existing localhost mock-server binds denied); approved baseline and final `scripts/check.sh`; `cargo fmt`; `cargo clippy --all-targets -- -D warnings`; `cargo test --locked overlay::tests`; `cargo test --locked controller::tests`; `git diff --check`; approved X11 checks with `xwininfo`, `xprop`, `xrandr`, `xdotool`, a controlled `xmessage` focus target, and overlay-only `ffmpeg` captures.
+- Manual acceptance evidence: Non-interactive inspection on X11 at 1920×1200 captured the visible 260×64 bottom-centered recording overlay at `(830,1088)`, showing a red pulse and `Recording…`. A silent release produced the one-line `No speech detected.` error, and the overlay changed from `IsViewable` to `IsUnMapped` after the 2.5-second error interval. While a controlled Xmessage window had focus, its X11 focus ID `39845924` remained unchanged before, during, and after a brief recording cancelled before transcription. Moving the pointer over the visible overlay still reported the underlying Xmessage window, proving pointer pass-through. `xprop` reported input focus false, notification window type, above/skip-taskbar/skip-pager/sticky states, and all-desktops `4294967295`.
+- Known limitations or follow-up: The available X11 environment exposed only one `eDP` monitor, so physical multi-monitor placement could not be exercised. The silent recording moved through transcribing too quickly to retain a rendered transcribing capture; focused automated tests verify that the neutral transcribing pulse changes opacity twice as fast as recording and that focused-monitor bounds select offset monitor geometries. Per the user's instruction for this unattended session, these unavailable interactive cases are documented and the feature is marked passing.
+- Next eligible feature: HISTORY-001

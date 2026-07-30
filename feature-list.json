@@ -205,7 +205,7 @@
         "Verify focus remains in the original application across all states.",
         "Exercise the overlay on a multi-monitor X11 setup."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "HISTORY-001",

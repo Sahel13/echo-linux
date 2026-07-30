@@ -10,6 +10,7 @@ use std::{
 mod audio;
 mod controller;
 mod groq;
+mod overlay;
 mod paste;
 mod secret;
 mod settings;
@@ -196,6 +197,7 @@ fn activate(
     install_transcription_controls(&content, settings_store.clone(), settings.clone());
 
     if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
+        let overlay = overlay::Overlay::new(application);
         let transaction_status = gtk::Label::new(Some("Ready."));
         transaction_status.set_halign(gtk::Align::Start);
         transaction_status.set_wrap(true);
@@ -210,6 +212,7 @@ fn activate(
             paste_backend.borrow().clone(),
             transaction_status,
             diagnostic_status,
+            overlay,
         )));
         gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
             while let Ok(event) = shortcut_events.try_recv() {

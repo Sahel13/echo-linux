@@ -1,6 +1,7 @@
 use crate::{
     audio::{self, FinalizedRecording, Recording, MINIMUM_VOICED_RUN_FRAMES},
     groq,
+    overlay::Overlay,
     paste::{PasteController, PasteResult},
     secret,
     settings::Settings,
@@ -127,6 +128,7 @@ pub struct DictationController {
     paste: Option<PasteController>,
     status: gtk::Label,
     diagnostic_status: gtk::Label,
+    overlay: Overlay,
     pressed_at: Option<Instant>,
     recording: Option<Recording>,
     start_receiver: Option<Receiver<Result<Recording, audio::CaptureError>>>,
@@ -161,6 +163,7 @@ impl DictationController {
         paste: Option<PasteController>,
         status: gtk::Label,
         diagnostic_status: gtk::Label,
+        overlay: Overlay,
     ) -> Self {
         Self {
             machine: Machine::new(),
@@ -169,6 +172,7 @@ impl DictationController {
             paste,
             status,
             diagnostic_status,
+            overlay,
             pressed_at: None,
             recording: None,
             start_receiver: None,
@@ -253,6 +257,7 @@ impl DictationController {
         self.release_requested = false;
         self.shortcut.set_recording(true);
         self.status.set_text("Recording…");
+        self.overlay.show_recording();
         self.start_receiver = Some(audio::start_recording(microphone));
         self.report("capture-started");
         thread::spawn(|| {
@@ -271,6 +276,7 @@ impl DictationController {
         self.pressed_at = None;
         self.remove_temporary_audio();
         self.status.set_text("Recording cancelled.");
+        self.overlay.hide();
         self.report("recording-cancelled");
     }
 
@@ -278,6 +284,7 @@ impl DictationController {
         self.shortcut.set_recording(false);
         self.pressed_at = None;
         self.status.set_text("Transcribing…");
+        self.overlay.show_transcribing();
         self.release_requested = true;
         self.report("finalization-requested");
         self.start_finalization_if_ready();
@@ -486,6 +493,7 @@ impl DictationController {
         self.release_requested = false;
         self.remove_temporary_audio();
         self.status.set_text(message);
+        self.overlay.show_error(message);
         self.error_deadline = Some(Instant::now() + ERROR_DURATION);
         self.report("error");
     }
@@ -496,6 +504,7 @@ impl DictationController {
         self.pending_transcript = None;
         self.remove_temporary_audio();
         self.status.set_text("Ready.");
+        self.overlay.hide();
         self.report("complete");
     }
 
