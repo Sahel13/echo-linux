@@ -100,3 +100,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: Automated tests passed for keysym resolution, Caps/Num-lock grab variants, detectable auto-repeat, fallback repeat suppression, and conflict messaging. Manual X11 verification was unavailable: although `DISPLAY=:0` is set, `xwininfo` returned `unable to open display ":0"`, so Echo could not connect to an X server.
 - Known limitations or follow-up: Keep `HOTKEY-001` at `passes: false`. In an accessible X11 session, focus another application and hold/release F10; relaunch Echo to inspect its shortcut status and confirm one press and one final release. Repeat with Caps Lock and Num Lock in all four combinations, then hold past keyboard-repeat delay and verify no early release. Change keyboard layouts, repeat the hold/release check, and confirm the re-resolved binding still works. Finally have an independent X11 client passively grab unmodified F10 before launching Echo; confirm Echo stays open and says another application is using F10.
 - Next eligible feature: HOTKEY-001
+
+### 2026-07-30 — HOTKEY-001 — default changed to ThinkPad XF86Favorites key; manual verification pending
+
+- Agent/session: Codex
+- Commit: this commit (`HOTKEY-001: default to XF86Favorites`)
+- What changed: At the user's request, changed the default shortcut from the X11 F10 keysym to the exact no-Fn ThinkPad key observed through `xev`: keycode `164`, keysym `XF86Favorites` (`0x1008ff30`). The typed settings default and the X11 resolver use the same key.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-targets --locked`; final `scripts/check.sh`.
+- Manual acceptance evidence: User reported that the prior HOTKEY-001 matrix was manually verified and supplied the emitted no-Fn key identity. The new `XF86Favorites` default was introduced after that matrix, so its press/release behavior has not yet been manually verified against this build.
+- Known limitations or follow-up: Keep `HOTKEY-001` at `passes: false`. In the accessible X11 session, launch this build, focus another application, and hold/release the phone-marked key that produces `XF86Favorites`; verify Echo receives one press and one final release. Repeat through Caps Lock/Num Lock combinations, keyboard repeat, keyboard-layout change, and a conflicting passive grab. Report the results to mark the feature passing.
+- Next eligible feature: HOTKEY-001

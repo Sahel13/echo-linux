@@ -15,7 +15,7 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
-const F10_KEYSYM: u32 = 0xffc7;
+const DEFAULT_KEYSYM: u32 = 0x1008ff30;
 const NUM_LOCK_KEYSYM: u32 = 0xff7f;
 const FALLBACK_RELEASE_DELAY: Duration = Duration::from_millis(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -141,7 +141,8 @@ struct Binding {
 
 impl Binding {
     fn resolve(connection: &RustConnection, root: u32) -> Result<Self, GrabError> {
-        let keycode = keycode_for_keysym(connection, F10_KEYSYM).ok_or(GrabError::Unavailable)?;
+        let keycode =
+            keycode_for_keysym(connection, DEFAULT_KEYSYM).ok_or(GrabError::Unavailable)?;
         let num_lock = num_lock_mask(connection).ok_or(GrabError::Unavailable)?;
         let modifiers = lock_modifier_variants(num_lock);
         let binding = Self {
@@ -355,7 +356,7 @@ mod tests {
     #[test]
     fn resolves_the_first_matching_keysym_from_a_keyboard_map() {
         assert_eq!(
-            keycode_from_mapping(8, 2, &[0, 0, 0xffc7, 0], F10_KEYSYM),
+            keycode_from_mapping(8, 2, &[0, 0, DEFAULT_KEYSYM, 0], DEFAULT_KEYSYM),
             Some(9)
         );
     }
