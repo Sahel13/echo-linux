@@ -9,6 +9,7 @@ pub enum PasteResult {
     ClipboardOnly,
 }
 
+#[derive(Clone)]
 pub struct PasteController {
     commands: mpsc::Sender<Command>,
 }

@@ -8,6 +8,7 @@ mod x11;
 pub enum ShortcutEvent {
     Pressed,
     Released,
+    Escape,
     Active,
     Conflict,
     Unavailable,
@@ -26,6 +27,7 @@ pub enum UpdateResult {
     Unavailable,
 }
 
+#[derive(Clone)]
 pub struct ShortcutController {
     commands: mpsc::Sender<Command>,
 }
@@ -35,6 +37,7 @@ pub enum Command {
         binding: Binding,
         result: mpsc::Sender<UpdateResult>,
     },
+    SetRecording(bool),
 }
 
 /// Platform seam for the future portal-based Wayland shortcut backend.
@@ -98,6 +101,10 @@ impl ShortcutController {
             result: sender,
         });
         receiver
+    }
+
+    pub fn set_recording(&self, recording: bool) {
+        let _ = self.commands.send(Command::SetRecording(recording));
     }
 }
 

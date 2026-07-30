@@ -17,6 +17,7 @@ use x11rb::{
 };
 
 const NUM_LOCK_KEYSYM: u32 = 0xff7f;
+const ESCAPE_KEYSYM: u32 = 0xff1b;
 const FALLBACK_RELEASE_DELAY: Duration = Duration::from_millis(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -50,34 +51,57 @@ impl ShortcutBackend for X11ShortcutBackend {
         let _ = sender.send(ShortcutEvent::Active);
 
         let mut repeat_filter = RepeatFilter::new(detectable_auto_repeat);
+        let mut escape_grab = None;
         loop {
-            while let Ok(Command::Update {
-                binding: requested,
-                result,
-            }) = commands.try_recv()
-            {
-                if requested == binding.requested {
-                    let _ = result.send(UpdateResult::Applied);
-                    continue;
-                }
-                match GrabbedBinding::resolve(&connection, root, &requested) {
-                    Ok(new_binding) => {
-                        binding.ungrab(&connection);
-                        binding = new_binding;
-                        let _ = result.send(UpdateResult::Applied);
-                        let _ = sender.send(ShortcutEvent::Active);
+            while let Ok(command) = commands.try_recv() {
+                match command {
+                    Command::Update {
+                        binding: requested,
+                        result,
+                    } => {
+                        if requested == binding.requested {
+                            let _ = result.send(UpdateResult::Applied);
+                            continue;
+                        }
+                        match GrabbedBinding::resolve(&connection, root, &requested) {
+                            Ok(new_binding) => {
+                                binding.ungrab(&connection);
+                                binding = new_binding;
+                                let _ = result.send(UpdateResult::Applied);
+                                let _ = sender.send(ShortcutEvent::Active);
+                            }
+                            Err(GrabError::Conflict) => {
+                                let _ = result.send(UpdateResult::Conflict);
+                            }
+                            Err(GrabError::Unavailable) => {
+                                let _ = result.send(UpdateResult::Unavailable);
+                            }
+                        }
                     }
-                    Err(GrabError::Conflict) => {
-                        let _ = result.send(UpdateResult::Conflict);
+                    Command::SetRecording(recording) if recording && escape_grab.is_none() => {
+                        escape_grab = EscapeGrab::resolve(&connection, root).ok();
+                        if escape_grab.is_none() {
+                            let _ = sender.send(ShortcutEvent::Unavailable);
+                        }
                     }
-                    Err(GrabError::Unavailable) => {
-                        let _ = result.send(UpdateResult::Unavailable);
+                    Command::SetRecording(false) => {
+                        if let Some(grab) = escape_grab.take() {
+                            grab.ungrab(&connection);
+                        }
                     }
+                    Command::SetRecording(_) => {}
                 }
             }
             match connection.poll_for_event() {
                 Ok(Some(event)) => {
                     let events = match event {
+                        Event::KeyPress(event)
+                            if escape_grab
+                                .as_ref()
+                                .is_some_and(|grab| event.detail == grab.keycode) =>
+                        {
+                            vec![ShortcutEvent::Escape]
+                        }
                         Event::KeyPress(event) if event.detail == binding.keycode => {
                             repeat_filter.key_press(event.time)
                         }
@@ -90,9 +114,19 @@ impl ShortcutBackend for X11ShortcutBackend {
                         {
                             send_events(&sender, repeat_filter.flush());
                             binding.ungrab(&connection);
+                            let was_recording = escape_grab.is_some();
+                            if let Some(grab) = escape_grab.take() {
+                                grab.ungrab(&connection);
+                            }
                             match GrabbedBinding::resolve(&connection, root, &binding.requested) {
                                 Ok(new_binding) => {
                                     binding = new_binding;
+                                    if was_recording {
+                                        escape_grab = EscapeGrab::resolve(&connection, root).ok();
+                                        if escape_grab.is_none() {
+                                            let _ = sender.send(ShortcutEvent::Unavailable);
+                                        }
+                                    }
                                     let _ = sender.send(ShortcutEvent::Active);
                                 }
                                 Err(GrabError::Conflict) => {
@@ -124,6 +158,57 @@ impl ShortcutBackend for X11ShortcutBackend {
                 }
             }
         }
+    }
+}
+
+struct EscapeGrab {
+    root: u32,
+    keycode: u8,
+    modifiers: Vec<ModMask>,
+}
+
+impl EscapeGrab {
+    fn resolve(connection: &RustConnection, root: u32) -> Result<Self, GrabError> {
+        let keycode =
+            keycode_for_keysym(connection, ESCAPE_KEYSYM).ok_or(GrabError::Unavailable)?;
+        let num_lock = num_lock_mask(connection).ok_or(GrabError::Unavailable)?;
+        let grab = Self {
+            root,
+            keycode,
+            modifiers: lock_modifier_variants(ModMask::default(), num_lock),
+        };
+        grab.grab(connection)?;
+        Ok(grab)
+    }
+
+    fn grab(&self, connection: &RustConnection) -> Result<(), GrabError> {
+        for modifier in &self.modifiers {
+            let result = connection
+                .grab_key(
+                    false,
+                    self.root,
+                    *modifier,
+                    self.keycode,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )
+                .map_err(|_| GrabError::Unavailable)
+                .and_then(|cookie| cookie.check().map_err(|_| GrabError::Unavailable));
+            if let Err(error) = result {
+                self.ungrab(connection);
+                return Err(error);
+            }
+        }
+        connection.flush().map_err(|_| GrabError::Unavailable)
+    }
+
+    fn ungrab(&self, connection: &RustConnection) {
+        for modifier in &self.modifiers {
+            if let Ok(cookie) = connection.ungrab_key(self.keycode, self.root, *modifier) {
+                let _ = cookie.check();
+            }
+        }
+        let _ = connection.flush();
     }
 }
 

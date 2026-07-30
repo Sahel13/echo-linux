@@ -8,6 +8,7 @@ use std::{
 };
 
 mod audio;
+mod controller;
 mod groq;
 mod paste;
 mod secret;
@@ -93,13 +94,15 @@ fn activate(
     message.set_wrap(true);
     content.append(&message);
 
-    let shortcut_controller = if session == SessionSupport::X11 {
+    let shortcut_runtime = if session == SessionSupport::X11 {
         let shortcut_status = gtk::Label::new(Some("Starting global shortcut…"));
         shortcut_status.set_halign(gtk::Align::Start);
         shortcut_status.set_wrap(true);
         content.append(&shortcut_status);
-        shortcut::binding_from_settings(&settings.borrow().shortcut)
-            .map(|binding| Rc::new(start_shortcut_backend(binding, shortcut_status)))
+        shortcut::binding_from_settings(&settings.borrow().shortcut).map(|binding| {
+            let (controller, events) = start_shortcut_backend(binding);
+            (Rc::new(controller), events, shortcut_status)
+        })
     } else {
         None
     };
@@ -118,7 +121,7 @@ fn activate(
     content.append(&shortcut_binding_label);
     let change_shortcut = gtk::Button::with_label("Change shortcut");
     change_shortcut.set_halign(gtk::Align::Start);
-    change_shortcut.set_sensitive(shortcut_controller.is_some());
+    change_shortcut.set_sensitive(shortcut_runtime.is_some());
     content.append(&change_shortcut);
 
     let api_key_status = gtk::Label::new(Some("Checking secure API-key storage…"));
@@ -177,6 +180,9 @@ fn activate(
         .content(&content)
         .build();
 
+    let shortcut_controller = shortcut_runtime
+        .as_ref()
+        .map(|(controller, _, _)| controller.clone());
     install_shortcut_capture(
         &window,
         &change_shortcut,
@@ -187,6 +193,39 @@ fn activate(
     );
 
     install_microphone_selector(&content, settings_store.clone(), settings.clone());
+
+    if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
+        let transaction_status = gtk::Label::new(Some("Ready."));
+        transaction_status.set_halign(gtk::Align::Start);
+        transaction_status.set_wrap(true);
+        content.append(&transaction_status);
+        let dictation = Rc::new(RefCell::new(controller::DictationController::new(
+            settings.clone(),
+            shortcut_controller,
+            paste_backend.borrow().clone(),
+            transaction_status,
+        )));
+        gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
+            while let Ok(event) = shortcut_events.try_recv() {
+                match event {
+                    shortcut::ShortcutEvent::Pressed
+                    | shortcut::ShortcutEvent::Released
+                    | shortcut::ShortcutEvent::Escape => {
+                        dictation.borrow_mut().handle_shortcut_event(event);
+                    }
+                    shortcut::ShortcutEvent::Active | shortcut::ShortcutEvent::Conflict => {
+                        shortcut_status.set_text(shortcut_status_message(event));
+                    }
+                    shortcut::ShortcutEvent::Unavailable => {
+                        dictation.borrow_mut().backend_unavailable();
+                        shortcut_status.set_text(shortcut_status_message(event));
+                    }
+                }
+            }
+            dictation.borrow_mut().tick();
+            gtk::glib::ControlFlow::Continue
+        });
+    }
 
     window.connect_close_request(|window| {
         window.hide();
@@ -405,18 +444,14 @@ fn secret_operation_message(result: SecretOperationResult) -> &'static str {
 
 fn start_shortcut_backend(
     binding: shortcut::Binding,
-    status: gtk::Label,
-) -> shortcut::ShortcutController {
+) -> (
+    shortcut::ShortcutController,
+    mpsc::Receiver<shortcut::ShortcutEvent>,
+) {
     let (sender, receiver) = mpsc::channel();
     let controller = shortcut::start_x11(binding, sender);
 
-    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
-        while let Ok(event) = receiver.try_recv() {
-            status.set_text(shortcut_status_message(event));
-        }
-        gtk::glib::ControlFlow::Continue
-    });
-    controller
+    (controller, receiver)
 }
 
 fn shortcut_status_message(event: shortcut::ShortcutEvent) -> &'static str {
@@ -424,6 +459,7 @@ fn shortcut_status_message(event: shortcut::ShortcutEvent) -> &'static str {
         shortcut::ShortcutEvent::Active => "Global shortcut is active.",
         shortcut::ShortcutEvent::Pressed => "Shortcut pressed (waiting for release).",
         shortcut::ShortcutEvent::Released => "Shortcut released.",
+        shortcut::ShortcutEvent::Escape => "Recording cancelled.",
         shortcut::ShortcutEvent::Conflict => {
             "Couldn't claim shortcut. Another application is using it; Echo remains open."
         }

@@ -51,6 +51,12 @@ impl ApiKeyStore {
         }
     }
 
+    pub fn load(&self) -> Result<String, SecretError> {
+        self.entry
+            .get_password()
+            .map_err(|_| SecretError::StorageUnavailable)
+    }
+
     #[cfg(test)]
     fn from_entry(entry: Entry) -> Self {
         Self { entry }
@@ -67,6 +73,10 @@ pub fn save_api_key(key: &str) -> Result<(), SecretError> {
 
 pub fn remove_api_key() -> Result<(), SecretError> {
     ApiKeyStore::open()?.remove()
+}
+
+pub fn load_api_key() -> Result<String, SecretError> {
+    ApiKeyStore::open()?.load()
 }
 
 #[cfg(test)]
