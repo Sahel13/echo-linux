@@ -210,3 +210,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: The three focused tests cover text-only restoration, protection against overwriting a newer clipboard owner, and the actionable injection-failure result. The required real X11 matrix could not run: this environment's X11 root-window query did not respond, so no GTK entry, browser, terminal, or rich-text target could be exercised.
 - Known limitations or follow-up: Keep `PASTE-001` at `passes: false`. In an accessible Xorg session, run `cargo test --locked paste::tests::live_x11_pastes_into_the_currently_focused_client -- --ignored --nocapture`, focus each GTK entry, browser field, terminal, and rich-text editor during its three-second delay, and verify the fixed `Echo paste check` text arrives without Echo taking focus. Repeat with a known text clipboard value and confirm it is restored. During the short paste delay, replace the clipboard from another application and confirm its newer value remains. Finally disable or deny XTEST and confirm the transcript remains on the clipboard with “Couldn't paste — transcript is on the clipboard.”
 - Next eligible feature: PASTE-001
+
+### 2026-07-30 — PASTE-001 — X11 paste backend manually verified
+
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: this commit (`PASTE-001: record manual verification`)
+- What changed: Marked the completed X11 paste feature passing; no application code changed in this session.
+- Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`; user run: `cargo test --locked paste::tests::live_x11_pastes_into_the_currently_focused_client -- --ignored --nocapture`.
+- Manual acceptance evidence: User confirmed the PASTE-001 matrix works, including insertion into the requested text targets without Echo taking focus, text clipboard restoration, preserving a newer clipboard value, and the actionable clipboard fallback on forced injection failure.
+- Known limitations or follow-up: None for PASTE-001.
+- Next eligible feature: FLOW-001

@@ -161,7 +161,7 @@
         "Change the clipboard during paste and verify Echo does not overwrite the newer value.",
         "Force injection failure and verify the transcript remains on the clipboard with an actionable error."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "FLOW-001",
