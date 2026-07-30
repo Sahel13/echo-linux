@@ -93,7 +93,7 @@
         "Attempt a conflicting binding and verify the old shortcut still works.",
         "Capture the ThinkPad phone-marked key and verify the actual emitted keysym can be bound."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AUDIO-001",

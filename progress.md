@@ -2,10 +2,10 @@
 
 ## Current state
 
-- Last completed feature: HOTKEY-001
-- Next eligible feature: HOTKEY-002
+- Last completed feature: HOTKEY-002
+- Next eligible feature: AUDIO-001
 - Build status: passing
-- Known blockers: HOTKEY-002 needs manual verification in an accessible X11 session.
+- Known blockers: none
 
 ## Session log
 
@@ -120,3 +120,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: The 20 non-ignored automated tests cover capture naming/modifiers, Escape and bare-modifier rejection, ThinkPad `XF86Favorites` conversion, custom modifier masks, settings reload, and the prior X11 grab/repeat behavior. Manual X11 verification was unavailable because `xwininfo` returned `unable to open display ":0"`.
 - Known limitations or follow-up: Keep `HOTKEY-002` at `passes: false`. In an accessible X11 session: (1) click Change shortcut, capture a non-modifier such as F9, verify its readable name, restart Echo, and confirm it remains shown and active; (2) click Change shortcut, press Escape, then separately press only Ctrl/Shift/Alt/Super and confirm capture cancels or remains pending without changing the saved binding; (3) capture Ctrl+F9 and verify its global press/release while another application has focus; (4) arrange a passive-grab conflict for a new candidate, attempt to capture it, and verify the old shortcut still works; (5) capture the ThinkPad phone-marked key and verify the emitted `XF86Favorites` binding works globally.
 - Next eligible feature: HOTKEY-002
+
+### 2026-07-30 — HOTKEY-002 — custom global shortcut manually verified
+
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: this commit (`HOTKEY-002: record manual verification`)
+- What changed: Marked the completed custom shortcut feature passing; no application code changed in this session.
+- Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`.
+- Manual acceptance evidence: User confirmed every HOTKEY-002 acceptance step: capturing and persisting a readable non-modifier shortcut, Escape cancellation and bare-modifier rejection, a global modified shortcut with press/release behavior, conflict rejection while the old shortcut remains active, and capture/binding of the ThinkPad phone-marked key's actual emitted keysym.
+- Known limitations or follow-up: None for HOTKEY-002.
+- Next eligible feature: AUDIO-001
