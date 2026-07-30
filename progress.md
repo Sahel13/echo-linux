@@ -2,10 +2,10 @@
 
 ## Current state
 
-- Last completed feature: APP-002
-- Next eligible feature: SET-001
+- Last completed feature: SET-001
+- Next eligible feature: KEY-001
 - Build status: passing
-- Known blockers: none
+- Known blockers: KEY-001 needs manual GTK verification on an accessible desktop session.
 
 ## Session log
 
@@ -69,4 +69,14 @@ Append entries; do not rewrite earlier entries.
 - Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-targets --locked`; final `scripts/check.sh`.
 - Manual acceptance evidence: No display server, hardware, credential, or interactive control is required for this persistence feature. The seven passing tests exercise all acceptance cases directly: every default, XDG path selection, changed settings reload via a fresh store, an interruption during the real write path before replacement, and inspection that the saved document has neither API-key nor transcript fields.
 - Known limitations or follow-up: Settings controls are intentionally deferred to their ordered features. The persisted schema includes the required setting types but no secret value or last transcript field.
+- Next eligible feature: KEY-001
+
+### 2026-07-30 — KEY-001 — Secret Service API-key lifecycle implemented; manual verification pending
+
+- Agent/session: Codex
+- Commit: this commit (`KEY-001: add Secret Service key storage`)
+- What changed: Added a `keyring` Secret Service backend that stores the Groq key at a dedicated Echo service/account pair. The GTK window now has a password entry, saved/not-saved status, and save/remove actions. All Secret Service access runs in a worker thread; the UI never reads a saved key into the entry and shows only generic secure-storage errors.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo test --locked`; `target/debug/deps/echo-e38521ea62a85e8e --ignored secret::tests::real_secret_service_saves_survives_a_fresh_store_replaces_and_removes`; final `scripts/check.sh`.
+- Manual acceptance evidence: The dedicated real-service test passed against the active desktop Secret Service, proving save, a fresh-store status lookup, replacement, and removal using a separate `key-001-test-groq-api-key` account. The GTK window was launched on X11, but this harness cannot inject keyboard input or inspect rendered label text, so the UI acceptance steps were not claimed as manual evidence.
+- Known limitations or follow-up: Keep `KEY-001` at `passes: false`. On an accessible X11 desktop with the normal keyring running, enter a disposable key in Echo’s password entry and save it; verify the status says a key is saved while the entry remains empty. Quit and relaunch Echo, verify saved status persists, replace it, then remove it. Inspect Echo’s XDG settings file, application logs, process arguments, and environment output to verify the disposable key is absent. Finally stop the desktop Secret Service, launch or refresh Echo, and verify the actionable secure-storage error appears. Report those observations before marking the feature passing.
 - Next eligible feature: KEY-001
