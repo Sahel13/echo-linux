@@ -2,10 +2,10 @@
 
 ## Current state
 
-- Last completed feature: INIT-001
-- Next eligible feature: APP-001
+- Last completed feature: APP-002
+- Next eligible feature: SET-001
 - Build status: passing
-- Known blockers: APP-002 requires manual verification in accessible X11 and non-X11 graphical sessions.
+- Known blockers: none
 
 ## Session log
 
@@ -50,3 +50,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: Automated tests cover X11 and every GTK backend classification (Wayland, Broadway, macOS, Win32, and unavailable display). Manual display verification was unavailable: the sandbox could not open the advertised `DISPLAY=:0`, and Broadway could create its Unix socket but could not bind an inspection port, so its rendered window could not be inspected.
 - Known limitations or follow-up: On an accessible Wayland session, launch Echo and verify the window says “Echo for Linux requires an X11 session. Global shortcuts and pasting are disabled.” Confirm that F10 and paste injection have no effect. On an accessible Xorg session, launch Echo and verify the unsupported-session text is absent and the ready text appears. Keep `APP-002` at `passes: false` until both visual checks are recorded.
 - Next eligible feature: APP-002
+
+### 2026-07-30 — APP-002 — X11-only session behavior manually verified
+
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: pending (`APP-002: record manual verification`)
+- What changed: Marked the completed X11 session gate feature passing; no application code changed in this session.
+- Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`.
+- Manual acceptance evidence: User confirmed the APP-002 acceptance checks: a non-X11 session shows the X11-required explanation with no shortcut-grab or paste-injection activity, and an X11 session does not show the unsupported-session message.
+- Known limitations or follow-up: None for APP-002.
+- Next eligible feature: SET-001

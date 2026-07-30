@@ -38,7 +38,7 @@
         "Verify no shortcut grab or paste-injection backend starts in that state.",
         "Run in X11 and verify the unsupported-session message is absent."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "SET-001",
