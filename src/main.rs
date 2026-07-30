@@ -74,15 +74,37 @@ fn activate(
     }
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_margin_top(24);
+    content.set_margin_top(18);
     content.set_margin_bottom(24);
-    content.set_margin_start(24);
-    content.set_margin_end(24);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
 
-    let title = gtk::Label::new(Some("Echo"));
-    title.add_css_class("title-1");
-    title.set_halign(gtk::Align::Start);
-    content.append(&title);
+    let clamp = adw::Clamp::builder()
+        .maximum_size(640)
+        .tightening_threshold(480)
+        .child(&content)
+        .build();
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .vexpand(true)
+        .child(&clamp)
+        .build();
+
+    let branding = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let icon = gtk::Image::from_icon_name("audio-input-microphone-symbolic");
+    icon.set_pixel_size(24);
+    icon.update_property(&[gtk::accessible::Property::Label("Echo microphone icon")]);
+    branding.append(&icon);
+    let window_title = adw::WindowTitle::new("Echo", "Hold your shortcut to dictate");
+    branding.append(&window_title);
+
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&branding));
+
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    shell.append(&header);
+    shell.append(&scroller);
 
     let backend = gtk::gdk::Display::default().map(|display| display.backend());
     let session = session_support(backend);
@@ -103,7 +125,6 @@ fn activate(
         let shortcut_status = gtk::Label::new(Some("Starting global shortcut…"));
         shortcut_status.set_halign(gtk::Align::Start);
         shortcut_status.set_wrap(true);
-        content.append(&shortcut_status);
         shortcut::binding_from_settings(&settings.borrow().shortcut).map(|binding| {
             let (controller, events) = start_shortcut_backend(binding);
             (Rc::new(controller), events, shortcut_status)
@@ -120,28 +141,23 @@ fn activate(
         content.append(&error);
     }
 
-    let shortcut_binding_label =
-        gtk::Label::new(Some(&shortcut_display(&settings.borrow().shortcut)));
-    shortcut_binding_label.set_halign(gtk::Align::Start);
-    content.append(&shortcut_binding_label);
-    let change_shortcut = gtk::Button::with_label("Change shortcut");
-    change_shortcut.set_halign(gtk::Align::Start);
-    change_shortcut.set_sensitive(shortcut_runtime.is_some());
-    content.append(&change_shortcut);
-
+    append_section_heading(&content, UI_SECTION_NAMES[0]);
     let api_key_status = gtk::Label::new(Some("Checking secure API-key storage…"));
     api_key_status.set_halign(gtk::Align::Start);
     api_key_status.set_wrap(true);
     content.append(&api_key_status);
 
     let api_key_input = gtk::PasswordEntry::new();
-    api_key_input.set_placeholder_text(Some("Groq API key"));
+    api_key_input.set_placeholder_text(Some(API_KEY_CONTROL));
     api_key_input.set_show_peek_icon(true);
+    api_key_input.update_property(&[gtk::accessible::Property::Label(API_KEY_CONTROL)]);
     content.append(&api_key_input);
 
     let api_key_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let save_api_key = gtk::Button::with_label("Save API key");
-    let remove_api_key = gtk::Button::with_label("Remove API key");
+    let save_api_key = gtk::Button::with_label(SAVE_API_KEY_CONTROL);
+    let remove_api_key = gtk::Button::with_label(REMOVE_API_KEY_CONTROL);
+    save_api_key.set_hexpand(true);
+    remove_api_key.set_hexpand(true);
     api_key_actions.append(&save_api_key);
     api_key_actions.append(&remove_api_key);
     content.append(&api_key_actions);
@@ -172,17 +188,27 @@ fn activate(
         }
     });
 
-    let quit = gtk::Button::with_label("Quit");
-    quit.set_halign(gtk::Align::End);
-    quit.set_action_name(Some("app.quit"));
-    content.append(&quit);
+    append_section_heading(&content, UI_SECTION_NAMES[1]);
+    let shortcut_binding_label =
+        gtk::Label::new(Some(&shortcut_display(&settings.borrow().shortcut)));
+    shortcut_binding_label.set_halign(gtk::Align::Start);
+    shortcut_binding_label.set_wrap(true);
+    content.append(&shortcut_binding_label);
+    let change_shortcut = gtk::Button::with_label(CHANGE_SHORTCUT_CONTROL);
+    change_shortcut.set_halign(gtk::Align::Start);
+    change_shortcut.set_sensitive(shortcut_runtime.is_some());
+    content.append(&change_shortcut);
+    if let Some((_, _, shortcut_status)) = &shortcut_runtime {
+        content.append(shortcut_status);
+    }
 
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title("Echo")
-        .default_width(360)
-        .default_height(180)
-        .content(&content)
+        .icon_name("audio-input-microphone-symbolic")
+        .default_width(480)
+        .default_height(680)
+        .content(&shell)
         .build();
 
     let shortcut_controller = shortcut_runtime
@@ -197,10 +223,11 @@ fn activate(
         settings.clone(),
     );
 
-    install_microphone_selector(&content, settings_store.clone(), settings.clone());
     install_transcription_controls(&content, settings_store.clone(), settings.clone());
+    install_microphone_selector(&content, settings_store.clone(), settings.clone());
     let (word_count, copy_last_transcript, history_status) =
         install_history_controls(&content, history.clone());
+    install_general_controls(&window, &content, settings_store.clone(), settings.clone());
 
     if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
         let overlay = overlay::Overlay::new(application);
@@ -258,13 +285,51 @@ fn activate(
     window.present();
 }
 
+const UI_SECTION_NAMES: [&str; 5] = ["API key", "Shortcut", "Transcription", "Input", "General"];
+const API_KEY_CONTROL: &str = "Groq API key";
+const SAVE_API_KEY_CONTROL: &str = "Save or replace API key";
+const REMOVE_API_KEY_CONTROL: &str = "Remove API key";
+const CHANGE_SHORTCUT_CONTROL: &str = "Change shortcut";
+const MODEL_CONTROL: &str = "Model";
+const LANGUAGE_CONTROL: &str = "Language";
+const STYLE_CONTROL: &str = "Style";
+const VOCABULARY_CONTROL: &str = "Custom vocabulary";
+const MICROPHONE_CONTROL: &str = "Microphone input";
+const LAUNCH_CONTROL: &str = "Launch at login";
+const COPY_CONTROL: &str = "Copy last transcript";
+const HELP_CONTROL: &str = "Help";
+const QUIT_CONTROL: &str = "Quit";
+#[cfg(test)]
+const UI_CONTROL_NAMES: [&str; 13] = [
+    API_KEY_CONTROL,
+    SAVE_API_KEY_CONTROL,
+    REMOVE_API_KEY_CONTROL,
+    CHANGE_SHORTCUT_CONTROL,
+    MODEL_CONTROL,
+    LANGUAGE_CONTROL,
+    STYLE_CONTROL,
+    VOCABULARY_CONTROL,
+    MICROPHONE_CONTROL,
+    LAUNCH_CONTROL,
+    COPY_CONTROL,
+    HELP_CONTROL,
+    QUIT_CONTROL,
+];
+const HELP_TEXT: &str = "Hold your configured shortcut, speak, then release it to transcribe and paste. Press Escape while recording to cancel. Echo requires an X11 session.";
+
+fn append_section_heading(content: &gtk::Box, text: &str) {
+    let heading = gtk::Label::new(Some(text));
+    heading.add_css_class("title-4");
+    heading.set_halign(gtk::Align::Start);
+    heading.set_margin_top(6);
+    content.append(&heading);
+}
+
 fn install_history_controls(
     content: &gtk::Box,
     history: Rc<RefCell<history::History>>,
 ) -> (gtk::Label, gtk::Button, gtk::Label) {
-    let heading = gtk::Label::new(Some("History"));
-    heading.set_halign(gtk::Align::Start);
-    content.append(&heading);
+    append_section_heading(content, UI_SECTION_NAMES[4]);
 
     let word_count = gtk::Label::new(Some(&format!(
         "Lifetime dictated words: {}",
@@ -273,7 +338,7 @@ fn install_history_controls(
     word_count.set_halign(gtk::Align::Start);
     content.append(&word_count);
 
-    let copy = gtk::Button::with_label("Copy last transcript");
+    let copy = gtk::Button::with_label(COPY_CONTROL);
     copy.set_halign(gtk::Align::Start);
     copy.set_sensitive(false);
     content.append(&copy);
@@ -301,6 +366,104 @@ fn install_history_controls(
     (word_count, copy, status)
 }
 
+fn install_general_controls(
+    window: &adw::ApplicationWindow,
+    content: &gtk::Box,
+    store: Option<settings::SettingsStore>,
+    settings: Rc<RefCell<settings::Settings>>,
+) {
+    let launch_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let launch_label = gtk::Label::with_mnemonic("_Launch at login");
+    launch_label.set_halign(gtk::Align::Start);
+    launch_label.set_hexpand(true);
+    let launch_at_login = gtk::Switch::new();
+    launch_at_login.set_active(settings.borrow().launch_at_login);
+    launch_at_login.update_property(&[gtk::accessible::Property::Label(LAUNCH_CONTROL)]);
+    launch_label.set_mnemonic_widget(Some(&launch_at_login));
+    launch_row.append(&launch_label);
+    launch_row.append(&launch_at_login);
+    content.append(&launch_row);
+
+    let launch_status = gtk::Label::new(None);
+    launch_status.set_halign(gtk::Align::Start);
+    launch_status.set_wrap(true);
+    content.append(&launch_status);
+
+    launch_at_login.connect_active_notify({
+        let settings = settings.clone();
+        let store = store.clone();
+        let status = launch_status.clone();
+        move |toggle| {
+            settings.borrow_mut().launch_at_login = toggle.is_active();
+            let Some(store) = store.clone() else {
+                status.set_text("Settings storage is unavailable.");
+                return;
+            };
+            status.set_text("Saving launch preference…");
+            save_launch_preference(store, settings.clone(), status.clone());
+        }
+    });
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let help = gtk::Button::with_mnemonic("_Help");
+    help.update_property(&[gtk::accessible::Property::Label(HELP_CONTROL)]);
+    help.set_hexpand(true);
+    let quit = gtk::Button::with_mnemonic("_Quit");
+    quit.update_property(&[gtk::accessible::Property::Label(QUIT_CONTROL)]);
+    quit.set_hexpand(true);
+    quit.set_action_name(Some("app.quit"));
+    actions.append(&help);
+    actions.append(&quit);
+    content.append(&actions);
+
+    help.connect_clicked({
+        let window = window.clone();
+        move |_| {
+            let dialog = gtk::AboutDialog::builder()
+                .transient_for(&window)
+                .modal(true)
+                .program_name("Echo")
+                .version(env!("CARGO_PKG_VERSION"))
+                .comments(HELP_TEXT)
+                .license_type(gtk::License::MitX11)
+                .build();
+            dialog.present();
+        }
+    });
+}
+
+fn save_launch_preference(
+    store: settings::SettingsStore,
+    settings: Rc<RefCell<settings::Settings>>,
+    status: gtk::Label,
+) {
+    let snapshot = settings.borrow().clone();
+    let (sender, receiver) = mpsc::channel();
+    let worker_store = store.clone();
+    let worker_snapshot = snapshot.clone();
+    thread::spawn(move || {
+        let _ = sender.send(worker_store.save(&worker_snapshot));
+    });
+
+    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                if *settings.borrow() == snapshot {
+                    status.set_text("Launch preference saved.");
+                } else {
+                    save_launch_preference(store.clone(), settings.clone(), status.clone());
+                }
+                gtk::glib::ControlFlow::Break
+            }
+            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                status.set_text("Couldn't save launch preference.");
+                gtk::glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+        }
+    });
+}
+
 const MODEL_NAMES: [&str; 2] = ["whisper-large-v3-turbo", "whisper-large-v3"];
 const LANGUAGE_NAMES: [&str; 14] = [
     "Auto-detect",
@@ -325,37 +488,43 @@ fn install_transcription_controls(
     store: Option<settings::SettingsStore>,
     settings: Rc<RefCell<settings::Settings>>,
 ) {
-    let heading = gtk::Label::new(Some("Transcription"));
-    heading.set_halign(gtk::Align::Start);
-    content.append(&heading);
+    append_section_heading(content, UI_SECTION_NAMES[2]);
 
-    let model_label = gtk::Label::new(Some("Model"));
+    let model_label = gtk::Label::with_mnemonic("_Model");
     model_label.set_halign(gtk::Align::Start);
     content.append(&model_label);
     let model = gtk::DropDown::from_strings(&MODEL_NAMES);
     model.set_selected(model_index(&settings.borrow().model));
+    model.update_property(&[gtk::accessible::Property::Label(MODEL_CONTROL)]);
+    model_label.set_mnemonic_widget(Some(&model));
     content.append(&model);
 
-    let language_label = gtk::Label::new(Some("Language"));
+    let language_label = gtk::Label::with_mnemonic("L_anguage");
     language_label.set_halign(gtk::Align::Start);
     content.append(&language_label);
     let language = gtk::DropDown::from_strings(&LANGUAGE_NAMES);
     language.set_selected(language_index(&settings.borrow().language));
+    language.update_property(&[gtk::accessible::Property::Label(LANGUAGE_CONTROL)]);
+    language_label.set_mnemonic_widget(Some(&language));
     content.append(&language);
 
-    let style_label = gtk::Label::new(Some("Style"));
+    let style_label = gtk::Label::with_mnemonic("_Style");
     style_label.set_halign(gtk::Align::Start);
     content.append(&style_label);
     let style = gtk::DropDown::from_strings(&STYLE_NAMES);
     style.set_selected(style_index(&settings.borrow().style));
+    style.update_property(&[gtk::accessible::Property::Label(STYLE_CONTROL)]);
+    style_label.set_mnemonic_widget(Some(&style));
     content.append(&style);
 
-    let vocabulary_label = gtk::Label::new(Some("Custom vocabulary"));
+    let vocabulary_label = gtk::Label::with_mnemonic("Custom _vocabulary");
     vocabulary_label.set_halign(gtk::Align::Start);
     content.append(&vocabulary_label);
     let vocabulary = gtk::Entry::new();
     vocabulary.set_placeholder_text(Some("Names or terms to recognize"));
     vocabulary.set_text(&settings.borrow().vocabulary);
+    vocabulary.update_property(&[gtk::accessible::Property::Label(VOCABULARY_CONTROL)]);
+    vocabulary_label.set_mnemonic_widget(Some(&vocabulary));
     content.append(&vocabulary);
 
     let status = gtk::Label::new(None);
@@ -501,13 +670,12 @@ fn install_microphone_selector(
     store: Option<settings::SettingsStore>,
     settings: Rc<RefCell<settings::Settings>>,
 ) {
-    let input_label = gtk::Label::new(Some("Input"));
-    input_label.set_halign(gtk::Align::Start);
-    content.append(&input_label);
+    append_section_heading(content, UI_SECTION_NAMES[3]);
 
     let selector = gtk::DropDown::from_strings(&["System Default"]);
     selector.set_halign(gtk::Align::Fill);
     selector.set_hexpand(true);
+    selector.update_property(&[gtk::accessible::Property::Label(MICROPHONE_CONTROL)]);
     content.append(&selector);
 
     let status = gtk::Label::new(Some("Loading microphones…"));
@@ -929,5 +1097,37 @@ mod tests {
             let style = style_from_index(index).expect("listed style has a setting");
             assert_eq!(style_index(&style), index);
         }
+    }
+
+    #[test]
+    fn settings_window_contract_has_the_required_groups_and_scope() {
+        assert_eq!(
+            UI_SECTION_NAMES,
+            ["API key", "Shortcut", "Transcription", "Input", "General"]
+        );
+        assert!(HELP_TEXT.contains("Hold your configured shortcut"));
+        assert!(HELP_TEXT.contains("Escape"));
+        assert!(HELP_TEXT.contains("X11"));
+        assert_eq!(
+            UI_CONTROL_NAMES,
+            [
+                "Groq API key",
+                "Save or replace API key",
+                "Remove API key",
+                "Change shortcut",
+                "Model",
+                "Language",
+                "Style",
+                "Custom vocabulary",
+                "Microphone input",
+                "Launch at login",
+                "Copy last transcript",
+                "Help",
+                "Quit",
+            ]
+        );
+        assert!(UI_CONTROL_NAMES
+            .iter()
+            .all(|control| !control.to_ascii_lowercase().contains("engine")));
     }
 }

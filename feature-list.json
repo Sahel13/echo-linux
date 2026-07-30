@@ -232,7 +232,7 @@
         "Navigate all controls with the keyboard and verify useful accessible names.",
         "Verify the window uses Echo branding without copying macOS menu styling."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AUTOSTART-001",

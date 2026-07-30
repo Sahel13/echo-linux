@@ -2,8 +2,8 @@
 
 ## Current state
 
-- Last completed feature: HISTORY-001
-- Next eligible feature: UI-001
+- Last completed feature: UI-001
+- Next eligible feature: AUTOSTART-001
 - Build status: passing
 - Known blockers: none
 
@@ -300,3 +300,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: This was an unattended session, so no live spoken transcription or human clipboard inspection was attempted. The three focused tests verify that one successful exact transcript adds its whitespace-delimited words once, that saving and reloading settings retains the total while a fresh process starts with an empty last transcript, and that an empty result changes neither value. Existing controller tests verify short, cancelled, empty, and failed paths never reach the non-empty transcript-success branch. The copy handler passes the retained string unchanged to GTK's text clipboard.
 - Known limitations or follow-up: Live end-to-end clipboard inspection and a spoken restart cycle were unavailable without human input. Per the user's instruction for this unattended session, these unavailable interactive checks are documented and HISTORY-001 is marked passing.
 - Next eligible feature: UI-001
+
+### 2026-07-30 — UI-001 — compact accessible settings window completed
+
+- Agent/session: Codex unattended implementation agent
+- Commit: this commit (`UI-001: complete settings window`)
+- What changed: Reorganized the existing controls into the five required API key, Shortcut, Transcription, Input, and General groups inside a vertically scrollable 640-pixel clamp. Added a standard libadwaita header with Echo name, microphone branding, and a short dictation subtitle; a persistent Launch at login switch; a keyboard-accessible Help dialog; and grouped Quit action. Added explicit accessible labels and mnemonics for controls without self-describing button text. The UI contains Groq settings directly and adds no engine picker, tray requirement, local transcription, or other out-of-scope feature. The launch preference only persists here; creating and validating the XDG autostart desktop file remains AUTOSTART-001.
+- Verification commands: `pwd`; complete reads of `AGENTS.md`, `docs/PORTING_GUIDE.md`, `progress.md`, and `feature-list.json`; `git log -10 --oneline`; `git status --short --branch`; `scripts/bootstrap.sh`; initial sandbox `scripts/check.sh` (existing localhost mock-server binds denied); approved baseline and final `scripts/check.sh`; `cargo fmt`; `cargo build --locked`; `cargo test --locked tests::settings_window_contract_has_the_required_groups_and_scope`; `cargo clippy --all-targets -- -D warnings`; `git diff --check`; approved X11 inspection with `xwininfo`, `xprop`, `xdotool`, and window-only `ffmpeg` captures.
+- Manual acceptance evidence: Unattended inspection on the active 1920×1170 X11 display captured the standard libadwaita Echo/microphone header and both the top and bottom of the vertically scrollable form. The content remained centered and bounded to 640 pixels at the wide tiled size; labels, status text, dropdowns, entries, actions, and the General switch remained readable. Synthetic Tab traversal advanced through the form and automatically scrolled from the API-key editor to the General actions. Alt+H opened a visible 560×342 `About Echo` dialog containing hold/release, Escape cancellation, and X11 guidance. Alt+L focused the Launch at login switch, Space changed the isolated XDG settings document from `false` to `true`, and Alt+Q exited Echo. The focused contract test covers all five required groups, all required control names, help content, and absence of an engine control; the full suite passed 58 tests with three documented environment-dependent tests ignored.
+- Known limitations or follow-up: The active tiling window manager forced Echo to 1920×1170 and ignored an X11 request to resize it to 480×680, so a second compact-size capture was unavailable. The scroll/clamp behavior was directly visible at the forced wide size, and the initial missing vertical-expansion defect found by that capture was fixed before final verification. The session's AT-SPI bus rejected connections, so a screen-reader tree could not be inspected; keyboard traversal, live mnemonics, explicit GTK accessible labels, and the focused contract test provide unattended evidence instead. Per the user's instruction for this unattended session, these unavailable interactive cases are documented and UI-001 is marked passing.
+- Next eligible feature: AUTOSTART-001
