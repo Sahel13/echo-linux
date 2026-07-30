@@ -9,6 +9,7 @@ use std::{
 
 mod audio;
 mod groq;
+mod paste;
 mod secret;
 mod settings;
 mod shortcut;
@@ -46,9 +47,11 @@ fn main() {
     application.add_action(&quit_action);
 
     let window = Rc::new(RefCell::new(None));
+    let paste_backend = Rc::new(RefCell::new(None));
     application.connect_activate({
         let window = window.clone();
-        move |application| activate(application, &window)
+        let paste_backend = paste_backend.clone();
+        move |application| activate(application, &window, &paste_backend)
     });
     application.run();
 }
@@ -56,6 +59,7 @@ fn main() {
 fn activate(
     application: &adw::Application,
     existing_window: &Rc<RefCell<Option<adw::ApplicationWindow>>>,
+    paste_backend: &Rc<RefCell<Option<paste::PasteController>>>,
 ) {
     if existing_window.borrow().is_some() {
         existing_window
@@ -79,6 +83,9 @@ fn activate(
 
     let backend = gtk::gdk::Display::default().map(|display| display.backend());
     let session = session_support(backend);
+    if session == SessionSupport::X11 && paste_backend.borrow().is_none() {
+        *paste_backend.borrow_mut() = Some(paste::start_x11());
+    }
     let (settings_store, settings, settings_error) = load_settings();
     let settings = Rc::new(RefCell::new(settings));
     let message = gtk::Label::new(Some(status_message(session)));
