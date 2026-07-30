@@ -2,10 +2,10 @@
 
 ## Current state
 
-- Last completed feature: HOTKEY-002
-- Next eligible feature: AUDIO-001
+- Last completed feature: AUDIO-001
+- Next eligible feature: AUDIO-002
 - Build status: passing
-- Known blockers: AUDIO-001 manual verification requires an accessible X11 desktop and live microphone hot-plug.
+- Known blockers: none
 
 ## Session log
 
@@ -140,3 +140,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: The three focused automated tests cover System Default ordering, retention of a connected selected input, and fallback when that input disappears. Manual verification was unavailable: `DISPLAY=:0` cannot be opened, Echo reports `Failed to open display`, and PulseAudio rejects the sandbox connection. No accessible microphone or rendered selector was available to inspect.
 - Known limitations or follow-up: Keep `AUDIO-001` at `passes: false`. In an accessible X11 desktop with at least two input sources, launch Echo and verify System Default plus each connected microphone appears in Input. Select a non-default device, quit/relaunch, and verify the selected label persists. Disconnect that device and wait up to two seconds (or click Refresh microphones); verify the selector changes to System Default and says the selected microphone disappeared. Reconnect an input and verify it appears in the list within two seconds without restarting Echo.
 - Next eligible feature: AUDIO-001
+
+### 2026-07-30 — AUDIO-001 — microphone selector manually verified
+
+- Agent/session: Codex with user-provided manual acceptance evidence
+- Commit: this commit (`AUDIO-001: record manual verification`)
+- What changed: Marked the completed microphone input-selection feature passing; no application code changed in this session.
+- Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`.
+- Manual acceptance evidence: User confirmed that the Input selector lists System Default and connected microphones; a selected microphone persists after restart; disconnecting it returns the selector to System Default with a clear UI update; and reconnecting a microphone refreshes the list without restarting Echo.
+- Known limitations or follow-up: None for AUDIO-001.
+- Next eligible feature: AUDIO-002

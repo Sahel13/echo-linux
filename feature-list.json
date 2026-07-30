@@ -106,7 +106,7 @@
         "Disconnect the selected microphone and verify Echo returns to System Default with a clear UI update.",
         "Reconnect a microphone and verify the list refreshes without restarting."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AUDIO-002",
