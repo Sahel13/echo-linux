@@ -170,3 +170,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: User ran the ignored live-device test successfully on their PipeWire system. It captured the system default and a specifically selected microphone and verified each finalized WAV is 16 kHz, mono, and 16-bit PCM. ALSA compatibility-layer diagnostics were emitted but the test passed.
 - Known limitations or follow-up: Keep `AUDIO-002` at `passes: false` until the settings window is manually confirmed responsive during an active recording and a live microphone disconnect is confirmed to terminate capture cleanly and permit a fresh recording. Also visually confirm the periodic refresh no longer flashes “Loading microphones…” while the settings window is open.
 - Next eligible feature: AUDIO-002
+
+### 2026-07-30 — AUDIO-002 — manually accepted complete
+
+- Agent/session: Codex with user-provided manual acceptance decision
+- Commit: this commit (`AUDIO-002: mark capture verified`)
+- What changed: Marked the completed microphone capture and WAV-finalization feature passing; no application code changed in this session.
+- Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`; user run: `cargo test --locked audio::tests::live_default_and_selected_microphones_finalize_valid_wavs -- --ignored`.
+- Manual acceptance evidence: User verified live PipeWire-backed capture from the system default and a selected microphone; the hardware test passed and validated 16 kHz mono 16-bit PCM WAV output. User explicitly accepted the feature as complete, with any later issue to be handled as a bug report.
+- Known limitations or follow-up: The active-recording settings-responsiveness and physical device-loss scenarios will be covered by the later controller workflow and revisited if a bug is reported.
+- Next eligible feature: GROQ-001

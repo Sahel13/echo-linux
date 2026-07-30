@@ -120,7 +120,7 @@
         "Interact with the settings window during recording and verify it remains responsive.",
         "Simulate device loss and verify capture terminates cleanly with no poisoned next recording."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "GROQ-001",
