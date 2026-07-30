@@ -193,6 +193,7 @@ fn activate(
     );
 
     install_microphone_selector(&content, settings_store.clone(), settings.clone());
+    install_transcription_controls(&content, settings_store.clone(), settings.clone());
 
     if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
         let transaction_status = gtk::Label::new(Some("Ready."));
@@ -238,6 +239,201 @@ fn activate(
     });
     *existing_window.borrow_mut() = Some(window.clone());
     window.present();
+}
+
+const MODEL_NAMES: [&str; 2] = ["whisper-large-v3-turbo", "whisper-large-v3"];
+const LANGUAGE_NAMES: [&str; 14] = [
+    "Auto-detect",
+    "English",
+    "Spanish",
+    "French",
+    "German",
+    "Italian",
+    "Portuguese",
+    "Dutch",
+    "Hindi",
+    "Arabic",
+    "Chinese",
+    "Japanese",
+    "Korean",
+    "Russian",
+];
+const STYLE_NAMES: [&str; 2] = ["Normal", "Lower Case"];
+
+fn install_transcription_controls(
+    content: &gtk::Box,
+    store: Option<settings::SettingsStore>,
+    settings: Rc<RefCell<settings::Settings>>,
+) {
+    let heading = gtk::Label::new(Some("Transcription"));
+    heading.set_halign(gtk::Align::Start);
+    content.append(&heading);
+
+    let model_label = gtk::Label::new(Some("Model"));
+    model_label.set_halign(gtk::Align::Start);
+    content.append(&model_label);
+    let model = gtk::DropDown::from_strings(&MODEL_NAMES);
+    model.set_selected(model_index(&settings.borrow().model));
+    content.append(&model);
+
+    let language_label = gtk::Label::new(Some("Language"));
+    language_label.set_halign(gtk::Align::Start);
+    content.append(&language_label);
+    let language = gtk::DropDown::from_strings(&LANGUAGE_NAMES);
+    language.set_selected(language_index(&settings.borrow().language));
+    content.append(&language);
+
+    let style_label = gtk::Label::new(Some("Style"));
+    style_label.set_halign(gtk::Align::Start);
+    content.append(&style_label);
+    let style = gtk::DropDown::from_strings(&STYLE_NAMES);
+    style.set_selected(style_index(&settings.borrow().style));
+    content.append(&style);
+
+    let vocabulary_label = gtk::Label::new(Some("Custom vocabulary"));
+    vocabulary_label.set_halign(gtk::Align::Start);
+    content.append(&vocabulary_label);
+    let vocabulary = gtk::Entry::new();
+    vocabulary.set_placeholder_text(Some("Names or terms to recognize"));
+    vocabulary.set_text(&settings.borrow().vocabulary);
+    content.append(&vocabulary);
+
+    let status = gtk::Label::new(None);
+    status.set_halign(gtk::Align::Start);
+    status.set_wrap(true);
+    content.append(&status);
+
+    model.connect_selected_notify({
+        let settings = settings.clone();
+        let store = store.clone();
+        let status = status.clone();
+        move |model| {
+            let Some(selected) = model_from_index(model.selected()) else {
+                return;
+            };
+            settings.borrow_mut().model = selected;
+            update_transcription_status(&status, &store, &settings);
+        }
+    });
+
+    language.connect_selected_notify({
+        let settings = settings.clone();
+        let store = store.clone();
+        let status = status.clone();
+        move |language| {
+            let Some(selected) = language_from_index(language.selected()) else {
+                return;
+            };
+            settings.borrow_mut().language = selected;
+            update_transcription_status(&status, &store, &settings);
+        }
+    });
+
+    style.connect_selected_notify({
+        let settings = settings.clone();
+        let store = store.clone();
+        let status = status.clone();
+        move |style| {
+            let Some(selected) = style_from_index(style.selected()) else {
+                return;
+            };
+            settings.borrow_mut().style = selected;
+            update_transcription_status(&status, &store, &settings);
+        }
+    });
+
+    vocabulary.connect_changed({
+        let settings = settings.clone();
+        let store = store.clone();
+        let status = status.clone();
+        move |vocabulary| {
+            settings.borrow_mut().vocabulary = vocabulary.text().into();
+            update_transcription_status(&status, &store, &settings);
+        }
+    });
+}
+
+fn update_transcription_status(
+    status: &gtk::Label,
+    store: &Option<settings::SettingsStore>,
+    settings: &Rc<RefCell<settings::Settings>>,
+) {
+    match store {
+        Some(store) if store.save(&settings.borrow()).is_ok() => {
+            status.set_text("Transcription settings saved.")
+        }
+        Some(_) => status.set_text("Couldn't save transcription settings."),
+        None => status.set_text("Settings storage is unavailable."),
+    }
+}
+
+fn model_index(model: &settings::Model) -> u32 {
+    match model {
+        settings::Model::WhisperLargeV3Turbo => 0,
+        settings::Model::WhisperLargeV3 => 1,
+    }
+}
+
+fn model_from_index(index: u32) -> Option<settings::Model> {
+    match index {
+        0 => Some(settings::Model::WhisperLargeV3Turbo),
+        1 => Some(settings::Model::WhisperLargeV3),
+        _ => None,
+    }
+}
+
+fn language_index(language: &settings::Language) -> u32 {
+    match language {
+        settings::Language::AutoDetect => 0,
+        settings::Language::English => 1,
+        settings::Language::Spanish => 2,
+        settings::Language::French => 3,
+        settings::Language::German => 4,
+        settings::Language::Italian => 5,
+        settings::Language::Portuguese => 6,
+        settings::Language::Dutch => 7,
+        settings::Language::Hindi => 8,
+        settings::Language::Arabic => 9,
+        settings::Language::Chinese => 10,
+        settings::Language::Japanese => 11,
+        settings::Language::Korean => 12,
+        settings::Language::Russian => 13,
+    }
+}
+
+fn language_from_index(index: u32) -> Option<settings::Language> {
+    Some(match index {
+        0 => settings::Language::AutoDetect,
+        1 => settings::Language::English,
+        2 => settings::Language::Spanish,
+        3 => settings::Language::French,
+        4 => settings::Language::German,
+        5 => settings::Language::Italian,
+        6 => settings::Language::Portuguese,
+        7 => settings::Language::Dutch,
+        8 => settings::Language::Hindi,
+        9 => settings::Language::Arabic,
+        10 => settings::Language::Chinese,
+        11 => settings::Language::Japanese,
+        12 => settings::Language::Korean,
+        13 => settings::Language::Russian,
+        _ => return None,
+    })
+}
+
+fn style_index(style: &settings::Style) -> u32 {
+    match style {
+        settings::Style::Normal => 0,
+        settings::Style::LowerCase => 1,
+    }
+}
+
+fn style_from_index(index: u32) -> Option<settings::Style> {
+    match index {
+        0 => Some(settings::Style::Normal),
+        1 => Some(settings::Style::LowerCase),
+        _ => None,
+    }
 }
 
 fn install_microphone_selector(
@@ -635,5 +831,43 @@ mod tests {
             shortcut_status_message(shortcut::ShortcutEvent::Conflict),
             "Couldn't claim shortcut. Another application is using it; Echo remains open."
         );
+    }
+
+    #[test]
+    fn transcription_control_options_cover_every_required_choice() {
+        assert_eq!(MODEL_NAMES, ["whisper-large-v3-turbo", "whisper-large-v3"]);
+        assert_eq!(
+            LANGUAGE_NAMES,
+            [
+                "Auto-detect",
+                "English",
+                "Spanish",
+                "French",
+                "German",
+                "Italian",
+                "Portuguese",
+                "Dutch",
+                "Hindi",
+                "Arabic",
+                "Chinese",
+                "Japanese",
+                "Korean",
+                "Russian",
+            ]
+        );
+        assert_eq!(STYLE_NAMES, ["Normal", "Lower Case"]);
+
+        for index in 0..LANGUAGE_NAMES.len() as u32 {
+            let language = language_from_index(index).expect("listed language has a setting");
+            assert_eq!(language_index(&language), index);
+        }
+        for index in 0..MODEL_NAMES.len() as u32 {
+            let model = model_from_index(index).expect("listed model has a setting");
+            assert_eq!(model_index(&model), index);
+        }
+        for index in 0..STYLE_NAMES.len() as u32 {
+            let style = style_from_index(index).expect("listed style has a setting");
+            assert_eq!(style_index(&style), index);
+        }
     }
 }

@@ -87,7 +87,7 @@ impl GroqClient {
             .multipart(form)
             .send()
             .map_err(|error| GroqError::Network(network_failure(&error)))?;
-        decode_response(response)
+        decode_response(response).map(|transcript| apply_style(transcript, &settings.style))
     }
 }
 
@@ -202,6 +202,13 @@ fn transcription_prompt(vocabulary: &str, style: &Style) -> String {
     }
 }
 
+fn apply_style(transcript: String, style: &Style) -> String {
+    match style {
+        Style::Normal => transcript,
+        Style::LowerCase => transcript.to_lowercase(),
+    }
+}
+
 #[derive(Debug)]
 pub enum GroqError {
     MissingApiKey,
@@ -295,7 +302,7 @@ mod tests {
             .transcribe(TEST_KEY, wav.path(), &settings)
             .expect("mock transcription succeeds");
 
-        assert_eq!(transcript, "Hello Echo.");
+        assert_eq!(transcript, "hello echo.");
         let request = server.next_request();
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/openai/v1/audio/transcriptions");
@@ -350,6 +357,18 @@ mod tests {
             .expect("mock transcription succeeds");
 
         assert!(server.next_request().body.contains(NORMAL_STYLE_EXEMPLAR));
+    }
+
+    #[test]
+    fn normal_style_preserves_text_and_lower_case_uses_unicode_lowercase() {
+        assert_eq!(
+            apply_style("ÉCHO İstanbul".into(), &Style::Normal),
+            "ÉCHO İstanbul"
+        );
+        assert_eq!(
+            apply_style("ÉCHO İstanbul".into(), &Style::LowerCase),
+            "écho i̇stanbul"
+        );
     }
 
     #[test]
