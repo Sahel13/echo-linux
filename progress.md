@@ -5,7 +5,7 @@
 - Last completed feature: KEY-001
 - Next eligible feature: HOTKEY-001
 - Build status: passing
-- Known blockers: none
+- Known blockers: HOTKEY-001 needs manual verification in an accessible X11 session.
 
 ## Session log
 
@@ -89,4 +89,14 @@ Append entries; do not rewrite earlier entries.
 - Verification commands: `scripts/bootstrap.sh`; `scripts/check.sh`; value-free inspection of the XDG settings schema, Echo user-journal line count, live Echo process count, and temporary application log size.
 - Manual acceptance evidence: User confirmed saving a disposable key reports saved without displaying it, status persists after restart, replacement and removal succeed, and stopping Secret Service displays the actionable storage error. The settings file contains only `version`, documented non-secret settings fields, and no `api_key` or `transcript` field. Echo had zero user-journal lines, no live process after the verification session, and a zero-byte temporary launch log; no key value was printed during inspection.
 - Known limitations or follow-up: None for KEY-001.
+- Next eligible feature: HOTKEY-001
+
+### 2026-07-30 — HOTKEY-001 — X11 F10 backend implemented; manual verification pending
+
+- Agent/session: Codex
+- Commit: this commit (`HOTKEY-001: implement X11 F10 backend`)
+- What changed: Added a worker-thread X11 shortcut backend using `x11rb`. It resolves the live F10 keysym mapping, passively grabs unmodified F10 for every Caps Lock/Num Lock state, enables XKB detectable auto-repeat when supported, and otherwise suppresses synthetic release/press repeat pairs. Keyboard-map and modifier-map changes re-resolve and re-grab the binding. Grab conflicts and connection failures leave Echo open with an actionable status. The GTK main thread receives only small typed shortcut events.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-targets --locked`; `xwininfo -root -display "$DISPLAY"`.
+- Manual acceptance evidence: Automated tests passed for keysym resolution, Caps/Num-lock grab variants, detectable auto-repeat, fallback repeat suppression, and conflict messaging. Manual X11 verification was unavailable: although `DISPLAY=:0` is set, `xwininfo` returned `unable to open display ":0"`, so Echo could not connect to an X server.
+- Known limitations or follow-up: Keep `HOTKEY-001` at `passes: false`. In an accessible X11 session, focus another application and hold/release F10; relaunch Echo to inspect its shortcut status and confirm one press and one final release. Repeat with Caps Lock and Num Lock in all four combinations, then hold past keyboard-repeat delay and verify no early release. Change keyboard layouts, repeat the hold/release check, and confirm the re-resolved binding still works. Finally have an independent X11 client passively grab unmodified F10 before launching Echo; confirm Echo stays open and says another application is using F10.
 - Next eligible feature: HOTKEY-001

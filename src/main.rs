@@ -3,8 +3,9 @@ use std::{cell::RefCell, rc::Rc, sync::mpsc, thread, time::Duration};
 
 mod secret;
 mod settings;
+mod shortcut;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionSupport {
     X11,
     Unsupported,
@@ -69,10 +70,19 @@ fn activate(
     content.append(&title);
 
     let backend = gtk::gdk::Display::default().map(|display| display.backend());
-    let message = gtk::Label::new(Some(status_message(session_support(backend))));
+    let session = session_support(backend);
+    let message = gtk::Label::new(Some(status_message(session)));
     message.set_halign(gtk::Align::Start);
     message.set_wrap(true);
     content.append(&message);
+
+    if session == SessionSupport::X11 {
+        let shortcut_status = gtk::Label::new(Some("Starting global F10 shortcut…"));
+        shortcut_status.set_halign(gtk::Align::Start);
+        shortcut_status.set_wrap(true);
+        content.append(&shortcut_status);
+        start_shortcut_backend(shortcut_status);
+    }
 
     if let Some(error_message) = settings_load_error_message() {
         let error = gtk::Label::new(Some(&error_message));
@@ -198,6 +208,32 @@ fn secret_operation_message(result: SecretOperationResult) -> &'static str {
     }
 }
 
+fn start_shortcut_backend(status: gtk::Label) {
+    let (sender, receiver) = mpsc::channel();
+    shortcut::start_default_x11(sender);
+
+    gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
+        while let Ok(event) = receiver.try_recv() {
+            status.set_text(shortcut_status_message(event));
+        }
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+fn shortcut_status_message(event: shortcut::ShortcutEvent) -> &'static str {
+    match event {
+        shortcut::ShortcutEvent::Active => "Global F10 shortcut is active.",
+        shortcut::ShortcutEvent::Pressed => "F10 pressed (waiting for release).",
+        shortcut::ShortcutEvent::Released => "F10 released.",
+        shortcut::ShortcutEvent::Conflict => {
+            "Couldn't claim F10. Another application is using it; Echo remains open."
+        }
+        shortcut::ShortcutEvent::Unavailable => {
+            "Couldn't start global F10 shortcut. Check your X11 session."
+        }
+    }
+}
+
 fn settings_load_error_message() -> Option<String> {
     let result = (|| {
         let store = settings::SettingsStore::for_current_user()?;
@@ -253,6 +289,14 @@ mod tests {
                 secret::ApiKeyStatus::Missing
             ))),
             "No API key saved"
+        );
+    }
+
+    #[test]
+    fn shortcut_conflict_is_actionable_without_closing_echo() {
+        assert_eq!(
+            shortcut_status_message(shortcut::ShortcutEvent::Conflict),
+            "Couldn't claim F10. Another application is using it; Echo remains open."
         );
     }
 }
