@@ -1,12 +1,14 @@
 use crate::{
     audio::{self, FinalizedRecording, Recording, MINIMUM_VOICED_RUN_FRAMES},
     groq,
+    history::History,
     overlay::Overlay,
     paste::{PasteController, PasteResult},
     secret,
-    settings::Settings,
+    settings::{Settings, SettingsStore},
     shortcut::{ShortcutController, ShortcutEvent},
 };
+use gtk::prelude::WidgetExt;
 use std::{
     path::PathBuf,
     sync::{
@@ -124,6 +126,7 @@ impl Machine {
 pub struct DictationController {
     machine: Machine,
     settings: std::rc::Rc<std::cell::RefCell<Settings>>,
+    history: HistoryRuntime,
     shortcut: std::rc::Rc<ShortcutController>,
     paste: Option<PasteController>,
     status: gtk::Label,
@@ -135,11 +138,38 @@ pub struct DictationController {
     finalize_receiver: Option<Receiver<Result<FinalizedRecording, audio::CaptureError>>>,
     transcription_receiver: Option<Receiver<Result<String, String>>>,
     paste_receiver: Option<Receiver<PasteResult>>,
+    history_save_receiver: Option<Receiver<Result<(), String>>>,
     pending_transcript: Option<String>,
     temporary_audio: Option<PathBuf>,
     release_requested: bool,
     error_deadline: Option<Instant>,
     diagnostics: TransactionDiagnostics,
+}
+
+pub struct HistoryRuntime {
+    store: Option<SettingsStore>,
+    state: std::rc::Rc<std::cell::RefCell<History>>,
+    word_count: gtk::Label,
+    copy_last_transcript: gtk::Button,
+    status: gtk::Label,
+}
+
+impl HistoryRuntime {
+    pub fn new(
+        store: Option<SettingsStore>,
+        state: std::rc::Rc<std::cell::RefCell<History>>,
+        word_count: gtk::Label,
+        copy_last_transcript: gtk::Button,
+        status: gtk::Label,
+    ) -> Self {
+        Self {
+            store,
+            state,
+            word_count,
+            copy_last_transcript,
+            status,
+        }
+    }
 }
 
 /// Per-transaction diagnostic counters. These are deliberately limited to
@@ -159,6 +189,7 @@ struct TransactionDiagnostics {
 impl DictationController {
     pub fn new(
         settings: std::rc::Rc<std::cell::RefCell<Settings>>,
+        history: HistoryRuntime,
         shortcut: std::rc::Rc<ShortcutController>,
         paste: Option<PasteController>,
         status: gtk::Label,
@@ -168,6 +199,7 @@ impl DictationController {
         Self {
             machine: Machine::new(),
             settings,
+            history,
             shortcut,
             paste,
             status,
@@ -179,6 +211,7 @@ impl DictationController {
             finalize_receiver: None,
             transcription_receiver: None,
             paste_receiver: None,
+            history_save_receiver: None,
             pending_transcript: None,
             temporary_audio: None,
             release_requested: false,
@@ -217,6 +250,7 @@ impl DictationController {
         self.poll_finalization();
         self.poll_transcription();
         self.poll_paste();
+        self.poll_history_save();
         if self
             .error_deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -417,6 +451,7 @@ impl DictationController {
                 if empty {
                     self.report("transcription-empty");
                 } else {
+                    self.record_history(&transcript);
                     self.pending_transcript = Some(transcript);
                     self.report("transcription-nonempty");
                 }
@@ -471,6 +506,60 @@ impl DictationController {
                 self.report("paste-failed");
                 self.fail_with_message("Couldn't paste — transcript is on the clipboard.")
             }
+        }
+    }
+
+    fn record_history(&mut self, transcript: &str) {
+        let total_words = {
+            let mut history = self.history.state.borrow_mut();
+            history.record_success(transcript.to_owned());
+            history.total_words()
+        };
+        self.settings.borrow_mut().total_words = total_words;
+        self.history
+            .word_count
+            .set_text(&format!("Lifetime dictated words: {total_words}"));
+        self.history.copy_last_transcript.set_sensitive(true);
+        self.history
+            .status
+            .set_text("Last transcript is ready to copy.");
+
+        let Some(store) = self.history.store.clone() else {
+            self.history
+                .status
+                .set_text("Last transcript is ready, but the word total couldn't be saved.");
+            return;
+        };
+        let settings = self.settings.borrow().clone();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result = store
+                .save(&settings)
+                .map_err(|_| "Couldn't save the lifetime word total.".to_owned());
+            let _ = sender.send(result);
+        });
+        self.history_save_receiver = Some(receiver);
+    }
+
+    fn poll_history_save(&mut self) {
+        let Some(receiver) = &self.history_save_receiver else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                self.history_save_receiver = None;
+            }
+            Ok(Err(message)) => {
+                self.history_save_receiver = None;
+                self.history.status.set_text(&message);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.history_save_receiver = None;
+                self.history
+                    .status
+                    .set_text("Couldn't save the lifetime word total.");
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
         }
     }
 

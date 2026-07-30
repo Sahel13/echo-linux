@@ -10,6 +10,7 @@ use std::{
 mod audio;
 mod controller;
 mod groq;
+mod history;
 mod overlay;
 mod paste;
 mod secret;
@@ -90,6 +91,9 @@ fn activate(
     }
     let (settings_store, settings, settings_error) = load_settings();
     let settings = Rc::new(RefCell::new(settings));
+    let history = Rc::new(RefCell::new(history::History::new(
+        settings.borrow().total_words,
+    )));
     let message = gtk::Label::new(Some(status_message(session)));
     message.set_halign(gtk::Align::Start);
     message.set_wrap(true);
@@ -195,6 +199,8 @@ fn activate(
 
     install_microphone_selector(&content, settings_store.clone(), settings.clone());
     install_transcription_controls(&content, settings_store.clone(), settings.clone());
+    let (word_count, copy_last_transcript, history_status) =
+        install_history_controls(&content, history.clone());
 
     if let Some((shortcut_controller, shortcut_events, shortcut_status)) = shortcut_runtime {
         let overlay = overlay::Overlay::new(application);
@@ -206,8 +212,16 @@ fn activate(
         diagnostic_status.set_halign(gtk::Align::Start);
         diagnostic_status.set_wrap(true);
         content.append(&diagnostic_status);
+        let history_runtime = controller::HistoryRuntime::new(
+            settings_store.clone(),
+            history,
+            word_count,
+            copy_last_transcript,
+            history_status,
+        );
         let dictation = Rc::new(RefCell::new(controller::DictationController::new(
             settings.clone(),
+            history_runtime,
             shortcut_controller,
             paste_backend.borrow().clone(),
             transaction_status,
@@ -242,6 +256,49 @@ fn activate(
     });
     *existing_window.borrow_mut() = Some(window.clone());
     window.present();
+}
+
+fn install_history_controls(
+    content: &gtk::Box,
+    history: Rc<RefCell<history::History>>,
+) -> (gtk::Label, gtk::Button, gtk::Label) {
+    let heading = gtk::Label::new(Some("History"));
+    heading.set_halign(gtk::Align::Start);
+    content.append(&heading);
+
+    let word_count = gtk::Label::new(Some(&format!(
+        "Lifetime dictated words: {}",
+        history.borrow().total_words()
+    )));
+    word_count.set_halign(gtk::Align::Start);
+    content.append(&word_count);
+
+    let copy = gtk::Button::with_label("Copy last transcript");
+    copy.set_halign(gtk::Align::Start);
+    copy.set_sensitive(false);
+    content.append(&copy);
+
+    let status = gtk::Label::new(Some("No transcript in this session."));
+    status.set_halign(gtk::Align::Start);
+    status.set_wrap(true);
+    content.append(&status);
+
+    copy.connect_clicked({
+        let history = history.clone();
+        let status = status.clone();
+        move |button| {
+            let transcript = history.borrow().last_transcript().to_owned();
+            if transcript.is_empty() {
+                button.set_sensitive(false);
+                status.set_text("No transcript in this session.");
+                return;
+            }
+            button.clipboard().set_text(&transcript);
+            status.set_text("Last transcript copied.");
+        }
+    });
+
+    (word_count, copy, status)
 }
 
 const MODEL_NAMES: [&str; 2] = ["whisper-large-v3-turbo", "whisper-large-v3"];

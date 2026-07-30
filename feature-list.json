@@ -218,7 +218,7 @@
         "Copy the last transcript and verify exact clipboard text.",
         "Verify failed, empty, short, and cancelled recordings change neither value."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "UI-001",

@@ -2,8 +2,8 @@
 
 ## Current state
 
-- Last completed feature: OVERLAY-001
-- Next eligible feature: HISTORY-001
+- Last completed feature: HISTORY-001
+- Next eligible feature: UI-001
 - Build status: passing
 - Known blockers: none
 
@@ -290,3 +290,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: Non-interactive inspection on X11 at 1920×1200 captured the visible 260×64 bottom-centered recording overlay at `(830,1088)`, showing a red pulse and `Recording…`. A silent release produced the one-line `No speech detected.` error, and the overlay changed from `IsViewable` to `IsUnMapped` after the 2.5-second error interval. While a controlled Xmessage window had focus, its X11 focus ID `39845924` remained unchanged before, during, and after a brief recording cancelled before transcription. Moving the pointer over the visible overlay still reported the underlying Xmessage window, proving pointer pass-through. `xprop` reported input focus false, notification window type, above/skip-taskbar/skip-pager/sticky states, and all-desktops `4294967295`.
 - Known limitations or follow-up: The available X11 environment exposed only one `eDP` monitor, so physical multi-monitor placement could not be exercised. The silent recording moved through transcribing too quickly to retain a rendered transcribing capture; focused automated tests verify that the neutral transcribing pulse changes opacity twice as fast as recording and that focused-monitor bounds select offset monitor geometries. Per the user's instruction for this unattended session, these unavailable interactive cases are documented and the feature is marked passing.
 - Next eligible feature: HISTORY-001
+
+### 2026-07-30 — HISTORY-001 — persistent word total and memory-only last transcript
+
+- Agent/session: Codex unattended implementation agent
+- Commit: this commit (`HISTORY-001: add dictation history`)
+- What changed: Added a process-local history state that records each non-empty successful transcription exactly once, counts whitespace-delimited words into the existing persisted `total_words` setting, and retains the exact styled transcript only in memory. Added a History section showing the lifetime total and a Copy last transcript action; persistence runs off the GTK thread and failures remain visible without exposing transcript text.
+- Verification commands: `pwd`; complete reads of `AGENTS.md`, `docs/PORTING_GUIDE.md`, `progress.md`, and `feature-list.json`; `git log -10 --oneline`; `git status --short --branch`; `scripts/bootstrap.sh`; sandbox baseline `scripts/check.sh` (existing localhost mock-server binds denied); approved baseline and final `scripts/check.sh`; `cargo fmt`; `cargo test --locked history::tests`; `cargo clippy --all-targets -- -D warnings`; `git diff --check`.
+- Manual acceptance evidence: This was an unattended session, so no live spoken transcription or human clipboard inspection was attempted. The three focused tests verify that one successful exact transcript adds its whitespace-delimited words once, that saving and reloading settings retains the total while a fresh process starts with an empty last transcript, and that an empty result changes neither value. Existing controller tests verify short, cancelled, empty, and failed paths never reach the non-empty transcript-success branch. The copy handler passes the retained string unchanged to GTK's text clipboard.
+- Known limitations or follow-up: Live end-to-end clipboard inspection and a spoken restart cycle were unavailable without human input. Per the user's instruction for this unattended session, these unavailable interactive checks are documented and HISTORY-001 is marked passing.
+- Next eligible feature: UI-001
