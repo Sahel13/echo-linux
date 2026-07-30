@@ -147,7 +147,7 @@
         "Verify requests are not automatically retried.",
         "Inspect captured logs and verify keys, authorization values, audio, and transcript text are absent."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "PASTE-001",

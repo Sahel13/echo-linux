@@ -190,3 +190,13 @@ Append entries; do not rewrite earlier entries.
 - Manual acceptance evidence: No manual acceptance is required for this feature. Four local mock-server tests verified the endpoint path and method, bearer authorization, WAV multipart part, model, language, prompt, response format, Auto-detect language omission, whitespace trimming, and recovery from a dropped prewarm connection. The mock server ran only on localhost and made no Groq request.
 - Known limitations or follow-up: Error mapping and secret-safe error-response handling are deferred to GROQ-002. The client is not yet connected to the dictation controller; FLOW-001 will invoke it from a worker thread.
 - Next eligible feature: GROQ-002
+
+### 2026-07-30 — GROQ-002 — Groq failure mapping verified
+
+- Agent/session: Codex
+- Commit: pending (`GROQ-002: map transcription failures`)
+- What changed: Added concise mappings for Groq HTTP responses and transport failures, including missing keys, authentication, payload size, rate limits, server responses, timeouts, offline connections, and DNS/connect/TLS failures. Groq `error.message` is trimmed and bounded to 80 characters, while malformed success responses remain generic. The client continues to issue one request with no automatic retry and emits no logs.
+- Verification commands: `scripts/bootstrap.sh`; baseline `scripts/check.sh`; `cargo fmt`; `cargo fmt --check`; `cargo test --locked groq::tests`; `cargo clippy --all-targets -- -D warnings`; final `scripts/check.sh`; `git diff --check`; source log-call audit with `rg`.
+- Manual acceptance evidence: No display server, credential, or hardware is required. Local loopback mock-server tests cover missing-key, 401/403, 413, 429, 5xx, other HTTP, malformed success, bounded `error.message`, timeout, no retry, and response/request privacy. The source audit found no application logging calls, so the Groq client cannot emit API keys, authorization headers, WAV data, or transcript text.
+- Known limitations or follow-up: The deterministic network tests cover the offline and DNS/connect/TLS classification messages; a live-network failure is not needed and no real Groq request was made. The client remains controller-unwired until FLOW-001.
+- Next eligible feature: PASTE-001

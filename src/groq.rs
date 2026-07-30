@@ -9,7 +9,7 @@ use reqwest::{
     StatusCode,
 };
 use serde::Deserialize;
-use std::{fmt, path::Path, time::Duration};
+use std::{error::Error as _, fmt, io::ErrorKind, path::Path, time::Duration};
 
 const TRANSCRIPTIONS_ENDPOINT: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const NORMAL_STYLE_EXEMPLAR: &str = "The following is a professional transcript with proper capitalization, punctuation, and complete sentences. The meeting starts at 3pm, the budget is $12,500, and we are in room 204.";
@@ -28,11 +28,19 @@ impl GroqClient {
     }
 
     fn for_endpoint(endpoint: &str) -> Result<Self, GroqError> {
+        Self::for_endpoint_with_timeout(endpoint, Duration::from_secs(10), Duration::from_secs(60))
+    }
+
+    fn for_endpoint_with_timeout(
+        endpoint: &str,
+        connect_timeout: Duration,
+        timeout: Duration,
+    ) -> Result<Self, GroqError> {
         let http = HttpClient::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(connect_timeout)
+            .timeout(timeout)
             .build()
-            .map_err(|_| GroqError::Transport)?;
+            .map_err(|error| GroqError::Network(network_failure(&error)))?;
         Ok(Self {
             http,
             endpoint: endpoint.into(),
@@ -78,20 +86,81 @@ impl GroqClient {
             .bearer_auth(api_key)
             .multipart(form)
             .send()
-            .map_err(|_| GroqError::Transport)?;
+            .map_err(|error| GroqError::Network(network_failure(&error)))?;
         decode_response(response)
     }
 }
 
 fn decode_response(response: Response) -> Result<String, GroqError> {
     let status = response.status();
-    let body = response.text().map_err(|_| GroqError::Transport)?;
+    let body = response
+        .text()
+        .map_err(|error| GroqError::Network(network_failure(&error)))?;
     if !status.is_success() {
-        return Err(GroqError::Http { status });
+        return Err(GroqError::Http {
+            status,
+            message: groq_error_message(&body),
+        });
     }
     serde_json::from_str::<TranscriptionResponse>(&body)
         .map(|response| response.text.trim().into())
         .map_err(|_| GroqError::UnreadableResponse)
+}
+
+fn groq_error_message(body: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct ErrorResponse {
+        error: ErrorBody,
+    }
+
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        message: String,
+    }
+
+    serde_json::from_str::<ErrorResponse>(body)
+        .ok()
+        .and_then(|response| {
+            let message = response.error.message.trim();
+            (!message.is_empty()).then(|| message.chars().take(80).collect())
+        })
+}
+
+fn network_failure(error: &reqwest::Error) -> NetworkFailure {
+    if error.is_timeout() {
+        return NetworkFailure::Timeout;
+    }
+
+    let mut source = error.source();
+    let mut has_offline_io_error = false;
+    while let Some(current) = source {
+        if current
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    ErrorKind::NetworkDown
+                        | ErrorKind::NetworkUnreachable
+                        | ErrorKind::HostUnreachable
+                        | ErrorKind::NotConnected
+                        | ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionReset
+                )
+            })
+        {
+            has_offline_io_error = true;
+            break;
+        }
+        source = current.source();
+    }
+    if has_offline_io_error {
+        NetworkFailure::Offline
+    } else if error.is_connect() {
+        // DNS, connection, and TLS failures all happen before an HTTP response.
+        NetworkFailure::Unreachable
+    } else {
+        NetworkFailure::Other
+    }
 }
 
 fn model_id(model: &Model) -> &'static str {
@@ -137,9 +206,20 @@ fn transcription_prompt(vocabulary: &str, style: &Style) -> String {
 pub enum GroqError {
     MissingApiKey,
     AudioFileUnavailable,
-    Transport,
-    Http { status: StatusCode },
+    Network(NetworkFailure),
+    Http {
+        status: StatusCode,
+        message: Option<String>,
+    },
     UnreadableResponse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkFailure {
+    Offline,
+    Timeout,
+    Unreachable,
+    Other,
 }
 
 impl fmt::Display for GroqError {
@@ -147,8 +227,31 @@ impl fmt::Display for GroqError {
         formatter.write_str(match self {
             Self::MissingApiKey => "No API key — add one in Settings",
             Self::AudioFileUnavailable => "Couldn't read the recording.",
-            Self::Transport => "Network error — try again",
-            Self::Http { .. } => "Groq request failed.",
+            Self::Network(NetworkFailure::Offline) => "No internet connection",
+            Self::Network(NetworkFailure::Timeout) => "Request timed out",
+            Self::Network(NetworkFailure::Unreachable) => "Can't reach Groq",
+            Self::Network(NetworkFailure::Other) => "Network error — try again",
+            Self::Http {
+                message: Some(message),
+                ..
+            } => message,
+            Self::Http { status, .. }
+                if *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN =>
+            {
+                "Invalid API key — check Settings"
+            }
+            Self::Http { status, .. } if *status == StatusCode::PAYLOAD_TOO_LARGE => {
+                "Recording too large for Groq"
+            }
+            Self::Http { status, .. } if *status == StatusCode::TOO_MANY_REQUESTS => {
+                "Rate limited by Groq — try again shortly"
+            }
+            Self::Http { status, .. } if status.is_server_error() => {
+                return write!(formatter, "Groq server error (HTTP {})", status.as_u16());
+            }
+            Self::Http { status, .. } => {
+                return write!(formatter, "Groq request failed (HTTP {})", status.as_u16());
+            }
             Self::UnreadableResponse => "Unreadable response from Groq",
         })
     }
@@ -268,6 +371,102 @@ mod tests {
         assert_eq!(server.next_request().method, "POST");
     }
 
+    #[test]
+    fn failure_statuses_map_to_actionable_messages_without_retrying() {
+        assert_response_error(401, "{}", "Invalid API key — check Settings");
+        assert_response_error(403, "{}", "Invalid API key — check Settings");
+        assert_response_error(413, "{}", "Recording too large for Groq");
+        assert_response_error(429, "{}", "Rate limited by Groq — try again shortly");
+        assert_response_error(503, "{}", "Groq server error (HTTP 503)");
+        assert_response_error(400, "{}", "Groq request failed (HTTP 400)");
+    }
+
+    #[test]
+    fn malformed_success_response_is_not_exposed_to_the_user() {
+        let server = MockServer::start(vec![MockResponse::json("not json")]);
+        let wav = TestWav::create();
+
+        let error = server
+            .client()
+            .transcribe(TEST_KEY, wav.path(), &Settings::default())
+            .expect_err("malformed response is rejected");
+
+        assert_eq!(error.to_string(), "Unreadable response from Groq");
+    }
+
+    #[test]
+    fn groq_error_message_is_trimmed_bounded_and_preferred() {
+        let server = MockServer::start(vec![MockResponse::status(
+            400,
+            "{\"error\":{\"message\":\"  a useful message that is deliberately long enough to exceed the eighty-character user-facing limit safely  \"}}",
+        )]);
+        let wav = TestWav::create();
+
+        let error = server
+            .client()
+            .transcribe(TEST_KEY, wav.path(), &Settings::default())
+            .expect_err("error response is returned");
+        let message = error.to_string();
+
+        assert_eq!(message.chars().count(), 80);
+        assert!(message.starts_with("a useful message"));
+        assert!(!message.contains(TEST_KEY));
+        assert!(!message.contains("transcript text"));
+    }
+
+    #[test]
+    fn missing_key_and_network_failures_have_short_private_messages() {
+        let wav = TestWav::create();
+        let missing_key = GroqClient::for_endpoint("http://127.0.0.1:1")
+            .expect("client builds")
+            .transcribe("  ", wav.path(), &Settings::default())
+            .expect_err("blank key is rejected before a request");
+        assert_eq!(missing_key.to_string(), "No API key — add one in Settings");
+
+        assert_eq!(
+            GroqError::Network(NetworkFailure::Offline).to_string(),
+            "No internet connection"
+        );
+        assert_eq!(
+            GroqError::Network(NetworkFailure::Unreachable).to_string(),
+            "Can't reach Groq"
+        );
+        assert_eq!(
+            GroqError::Network(NetworkFailure::Other).to_string(),
+            "Network error — try again"
+        );
+    }
+
+    #[test]
+    fn a_timed_out_request_maps_to_the_timeout_message() {
+        let server = MockServer::start(vec![MockResponse::status_after(
+            200,
+            "{\"text\":\"never returned\"}",
+            Duration::from_millis(50),
+        )]);
+        let wav = TestWav::create();
+
+        let error = server
+            .client_with_timeout(Duration::from_millis(10))
+            .transcribe(TEST_KEY, wav.path(), &Settings::default())
+            .expect_err("slow response times out");
+
+        assert_eq!(error.to_string(), "Request timed out");
+    }
+
+    fn assert_response_error(status: u16, body: &'static str, expected: &str) {
+        let server = MockServer::start(vec![MockResponse::status(status, body)]);
+        let wav = TestWav::create();
+
+        let error = server
+            .client()
+            .transcribe(TEST_KEY, wav.path(), &Settings::default())
+            .expect_err("error response does not retry");
+
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(server.next_request().method, "POST");
+    }
+
     fn assert_field(body: &str, name: &str, value: &str) {
         assert!(
             body.contains(&format!("name=\"{name}\"\r\n\r\n{value}\r\n")),
@@ -337,6 +536,11 @@ mod tests {
             GroqClient::for_endpoint(&self.endpoint).expect("client builds")
         }
 
+        fn client_with_timeout(&self, timeout: Duration) -> GroqClient {
+            GroqClient::for_endpoint_with_timeout(&self.endpoint, timeout, timeout)
+                .expect("client builds")
+        }
+
         fn next_request(&self) -> RecordedRequest {
             self.requests.recv().expect("captured request is available")
         }
@@ -353,6 +557,7 @@ mod tests {
     struct MockResponse {
         status: Option<u16>,
         body: &'static str,
+        delay: Duration,
     }
 
     impl MockResponse {
@@ -360,6 +565,23 @@ mod tests {
             Self {
                 status: Some(200),
                 body,
+                delay: Duration::ZERO,
+            }
+        }
+
+        fn status(status: u16, body: &'static str) -> Self {
+            Self {
+                status: Some(status),
+                body,
+                delay: Duration::ZERO,
+            }
+        }
+
+        fn status_after(status: u16, body: &'static str, delay: Duration) -> Self {
+            Self {
+                status: Some(status),
+                body,
+                delay,
             }
         }
 
@@ -367,6 +589,7 @@ mod tests {
             Self {
                 status: None,
                 body: "",
+                delay: Duration::ZERO,
             }
         }
 
@@ -374,14 +597,14 @@ mod tests {
             let Some(status) = self.status else {
                 return;
             };
-            write!(
+            thread::sleep(self.delay);
+            let _ = write!(
                 stream,
                 "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
                 status,
                 self.body.len(),
                 self.body
-            )
-            .expect("mock response writes");
+            );
         }
     }
 
