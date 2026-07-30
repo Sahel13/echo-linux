@@ -15,10 +15,15 @@ use std::{
     },
     thread,
 };
+use webrtc_vad::{SampleRate, Vad, VadMode};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const TARGET_CHANNELS: u16 = 1;
 const TARGET_BITS_PER_SAMPLE: u16 = 16;
+const VAD_FRAME_SAMPLES: usize = 320; // 20 ms at 16 kHz, required by WebRTC VAD.
+/// Reject isolated WebRTC VAD positives from microphone noise. A 200 ms
+/// contiguous run is still short enough for a brief spoken dictation.
+pub const MINIMUM_VOICED_RUN_FRAMES: usize = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InputDevice {
@@ -59,6 +64,11 @@ impl std::error::Error for CaptureError {}
 pub struct FinalizedRecording {
     pub path: PathBuf,
     pub frames: usize,
+    /// Number of fixed-duration frames classified as speech by WebRTC VAD.
+    /// This is a count only; no sample or transcript data is retained.
+    pub speech_frames: usize,
+    /// Longest contiguous run of VAD speech frames, also only a count.
+    pub longest_speech_run: usize,
 }
 
 /// A running CPAL capture. Its callback only converts and copies samples into
@@ -406,10 +416,52 @@ fn write_wav(path: PathBuf, samples: &[i16]) -> Result<FinalizedRecording, Captu
     writer
         .finalize()
         .map_err(|_| CaptureError::FinalizeFailed)?;
+    let activity = voice_activity(samples);
     Ok(FinalizedRecording {
         path,
         frames: samples.len(),
+        speech_frames: activity.speech_frames,
+        longest_speech_run: activity.longest_run,
     })
+}
+
+struct VoiceActivity {
+    speech_frames: usize,
+    longest_run: usize,
+}
+
+fn voice_activity(samples: &[i16]) -> VoiceActivity {
+    let mut vad = Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive);
+    let mut speech_frames = 0;
+    let mut current_run = 0;
+    let mut longest_run = 0;
+    for frame in samples.chunks_exact(VAD_FRAME_SAMPLES) {
+        if vad.is_voice_segment(frame).unwrap_or(false) {
+            speech_frames += 1;
+            current_run += 1;
+            longest_run = longest_run.max(current_run);
+        } else {
+            current_run = 0;
+        }
+    }
+    VoiceActivity {
+        speech_frames,
+        longest_run,
+    }
+}
+
+fn longest_voiced_run(decisions: impl IntoIterator<Item = bool>) -> usize {
+    let mut current_run = 0;
+    let mut longest_run = 0;
+    for speech in decisions {
+        if speech {
+            current_run += 1;
+            longest_run = longest_run.max(current_run);
+        } else {
+            current_run = 0;
+        }
+    }
+    longest_run
 }
 
 #[cfg(test)]
@@ -494,7 +546,25 @@ mod tests {
         assert_eq!(spec.bits_per_sample, TARGET_BITS_PER_SAMPLE);
         assert_eq!(spec.sample_format, hound::SampleFormat::Int);
         assert_eq!(recording.frames, 3);
+        assert_eq!(recording.speech_frames, 0);
+        assert_eq!(recording.longest_speech_run, 0);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn web_rtc_vad_rejects_silent_frames() {
+        let activity = voice_activity(&vec![0; VAD_FRAME_SAMPLES * 3]);
+        assert_eq!(activity.speech_frames, 0);
+        assert_eq!(activity.longest_run, 0);
+    }
+
+    #[test]
+    fn requires_a_contiguous_vad_run_to_filter_sparse_noise_positives() {
+        assert_eq!(
+            longest_voiced_run([true, false, true, true, false, true]),
+            2
+        );
+        assert!(longest_voiced_run([true; MINIMUM_VOICED_RUN_FRAMES]) >= MINIMUM_VOICED_RUN_FRAMES);
     }
 
     #[test]

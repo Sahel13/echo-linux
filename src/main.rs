@@ -199,11 +199,16 @@ fn activate(
         transaction_status.set_halign(gtk::Align::Start);
         transaction_status.set_wrap(true);
         content.append(&transaction_status);
+        let diagnostic_status = gtk::Label::new(Some("Diagnostic: waiting for a transaction."));
+        diagnostic_status.set_halign(gtk::Align::Start);
+        diagnostic_status.set_wrap(true);
+        content.append(&diagnostic_status);
         let dictation = Rc::new(RefCell::new(controller::DictationController::new(
             settings.clone(),
             shortcut_controller,
             paste_backend.borrow().clone(),
             transaction_status,
+            diagnostic_status,
         )));
         gtk::glib::timeout_add_local(Duration::from_millis(25), move || {
             while let Ok(event) = shortcut_events.try_recv() {

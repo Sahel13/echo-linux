@@ -176,7 +176,7 @@
         "Attempt another hold while transcribing and verify it is ignored.",
         "Verify temporary audio is deleted after success, empty speech, cancellation, and every failure."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "STYLE-001",

@@ -1,5 +1,5 @@
 use crate::{
-    audio::{self, FinalizedRecording, Recording},
+    audio::{self, FinalizedRecording, Recording, MINIMUM_VOICED_RUN_FRAMES},
     groq,
     paste::{PasteController, PasteResult},
     secret,
@@ -19,6 +19,7 @@ use std::{
 const MINIMUM_RECORDING_DURATION: Duration = Duration::from_millis(300);
 const ERROR_DURATION: Duration = Duration::from_millis(2500);
 static RECORDING_COUNTER: AtomicU64 = AtomicU64::new(0);
+static TRANSACTION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum State {
@@ -34,7 +35,7 @@ enum Event {
     Released { long_enough: bool },
     Escape,
     CaptureFailed,
-    Finalized,
+    Finalized { longest_speech_run: usize },
     FinalizeFailed,
     Transcript { empty: bool },
     TranscriptionFailed,
@@ -89,7 +90,16 @@ impl Machine {
                 self.state = State::Error;
                 Some(Effect::ShowFailure)
             }
-            (State::Transcribing, Event::Finalized) => Some(Effect::Transcribe),
+            (
+                State::Transcribing,
+                Event::Finalized {
+                    longest_speech_run: MINIMUM_VOICED_RUN_FRAMES..,
+                },
+            ) => Some(Effect::Transcribe),
+            (State::Transcribing, Event::Finalized { .. }) => {
+                self.state = State::Error;
+                Some(Effect::ShowNoSpeech)
+            }
             (State::Transcribing, Event::Transcript { empty: false }) => Some(Effect::Paste),
             (State::Transcribing, Event::Transcript { empty: true }) => {
                 self.state = State::Error;
@@ -116,6 +126,7 @@ pub struct DictationController {
     shortcut: std::rc::Rc<ShortcutController>,
     paste: Option<PasteController>,
     status: gtk::Label,
+    diagnostic_status: gtk::Label,
     pressed_at: Option<Instant>,
     snapshot: Option<Settings>,
     recording: Option<Recording>,
@@ -123,9 +134,25 @@ pub struct DictationController {
     finalize_receiver: Option<Receiver<Result<FinalizedRecording, audio::CaptureError>>>,
     transcription_receiver: Option<Receiver<Result<String, String>>>,
     paste_receiver: Option<Receiver<PasteResult>>,
+    pending_transcript: Option<String>,
     temporary_audio: Option<PathBuf>,
     release_requested: bool,
     error_deadline: Option<Instant>,
+    diagnostics: TransactionDiagnostics,
+}
+
+/// Per-transaction diagnostic counters. These are deliberately limited to
+/// state and operation counts: no text, audio, path, key, or request data is
+/// retained or reported.
+#[derive(Default)]
+struct TransactionDiagnostics {
+    id: u64,
+    capture_ready: u32,
+    finalized_frames: Option<usize>,
+    speech_frames: Option<usize>,
+    longest_speech_run: Option<usize>,
+    transcription_requests: u32,
+    paste_attempts: u32,
 }
 
 impl DictationController {
@@ -134,6 +161,7 @@ impl DictationController {
         shortcut: std::rc::Rc<ShortcutController>,
         paste: Option<PasteController>,
         status: gtk::Label,
+        diagnostic_status: gtk::Label,
     ) -> Self {
         Self {
             machine: Machine::new(),
@@ -141,6 +169,7 @@ impl DictationController {
             shortcut,
             paste,
             status,
+            diagnostic_status,
             pressed_at: None,
             snapshot: None,
             recording: None,
@@ -148,22 +177,35 @@ impl DictationController {
             finalize_receiver: None,
             transcription_receiver: None,
             paste_receiver: None,
+            pending_transcript: None,
             temporary_audio: None,
             release_requested: false,
             error_deadline: None,
+            diagnostics: TransactionDiagnostics::default(),
         }
     }
 
     pub fn handle_shortcut_event(&mut self, event: ShortcutEvent) {
         match event {
-            ShortcutEvent::Pressed => self.apply(Event::Pressed),
+            ShortcutEvent::Pressed => {
+                self.report("shortcut-pressed");
+                self.apply(Event::Pressed);
+            }
             ShortcutEvent::Released => {
                 let long_enough = self
                     .pressed_at
                     .is_some_and(|pressed_at| pressed_at.elapsed() >= MINIMUM_RECORDING_DURATION);
+                self.report(if long_enough {
+                    "shortcut-released-long"
+                } else {
+                    "shortcut-released-short"
+                });
                 self.apply(Event::Released { long_enough });
             }
-            ShortcutEvent::Escape => self.apply(Event::Escape),
+            ShortcutEvent::Escape => {
+                self.report("escape");
+                self.apply(Event::Escape);
+            }
             ShortcutEvent::Active | ShortcutEvent::Conflict | ShortcutEvent::Unavailable => {}
         }
     }
@@ -204,6 +246,10 @@ impl DictationController {
     }
 
     fn start_recording(&mut self) {
+        self.diagnostics = TransactionDiagnostics {
+            id: TRANSACTION_COUNTER.fetch_add(1, Ordering::Relaxed) + 1,
+            ..TransactionDiagnostics::default()
+        };
         self.snapshot = Some(self.settings.borrow().clone());
         let microphone = self
             .snapshot
@@ -216,6 +262,7 @@ impl DictationController {
         self.shortcut.set_recording(true);
         self.status.set_text("Recording…");
         self.start_receiver = Some(audio::start_recording(microphone));
+        self.report("capture-started");
         thread::spawn(|| {
             if let Ok(client) = groq::GroqClient::new() {
                 client.prewarm();
@@ -227,11 +274,13 @@ impl DictationController {
         self.shortcut.set_recording(false);
         self.start_receiver = None;
         self.recording = None;
+        self.pending_transcript = None;
         self.release_requested = false;
         self.pressed_at = None;
         self.snapshot = None;
         self.remove_temporary_audio();
         self.status.set_text("Recording cancelled.");
+        self.report("recording-cancelled");
     }
 
     fn request_finalization(&mut self) {
@@ -239,6 +288,7 @@ impl DictationController {
         self.pressed_at = None;
         self.status.set_text("Transcribing…");
         self.release_requested = true;
+        self.report("finalization-requested");
         self.start_finalization_if_ready();
     }
 
@@ -250,6 +300,7 @@ impl DictationController {
         let path = temporary_recording_path();
         self.temporary_audio = Some(path.clone());
         self.finalize_receiver = Some(recording.finish(path));
+        self.report("finalization-started");
     }
 
     fn poll_recording_start(&mut self) {
@@ -267,17 +318,27 @@ impl DictationController {
         self.start_receiver = None;
         match result {
             Ok(Ok(recording)) if self.machine.state == State::Recording => {
-                self.recording = Some(recording)
+                self.recording = Some(recording);
+                self.diagnostics.capture_ready += 1;
+                self.report("capture-ready");
             }
             Ok(Ok(recording))
                 if self.machine.state == State::Transcribing && self.release_requested =>
             {
                 self.recording = Some(recording);
+                self.diagnostics.capture_ready += 1;
+                self.report("capture-ready-after-release");
                 self.start_finalization_if_ready();
             }
             Ok(Ok(recording)) => drop(recording),
-            Ok(Err(error)) => self.fail_with_message(&error.to_string()),
-            Err(()) => self.apply(Event::CaptureFailed),
+            Ok(Err(error)) => {
+                self.report("capture-failed");
+                self.fail_with_message(&error.to_string())
+            }
+            Err(()) => {
+                self.report("capture-disconnected");
+                self.apply(Event::CaptureFailed)
+            }
         }
     }
 
@@ -295,9 +356,23 @@ impl DictationController {
         };
         self.finalize_receiver = None;
         match result {
-            Ok(Ok(_recording)) => self.apply(Event::Finalized),
-            Ok(Err(error)) => self.fail_with_message(&error.to_string()),
-            Err(()) => self.apply(Event::FinalizeFailed),
+            Ok(Ok(recording)) => {
+                self.diagnostics.finalized_frames = Some(recording.frames);
+                self.diagnostics.speech_frames = Some(recording.speech_frames);
+                self.diagnostics.longest_speech_run = Some(recording.longest_speech_run);
+                self.report("finalized");
+                self.apply(Event::Finalized {
+                    longest_speech_run: recording.longest_speech_run,
+                })
+            }
+            Ok(Err(error)) => {
+                self.report("finalization-failed");
+                self.fail_with_message(&error.to_string())
+            }
+            Err(()) => {
+                self.report("finalization-disconnected");
+                self.apply(Event::FinalizeFailed)
+            }
         }
     }
 
@@ -311,6 +386,8 @@ impl DictationController {
             return;
         };
         let (sender, receiver) = mpsc::channel();
+        self.diagnostics.transcription_requests += 1;
+        self.report("transcription-requested");
         thread::spawn(move || {
             let result = match secret::load_api_key() {
                 Ok(api_key) => groq::GroqClient::new()
@@ -342,26 +419,39 @@ impl DictationController {
         match result {
             Ok(Ok(transcript)) => {
                 let empty = transcript.is_empty();
-                if !empty {
-                    self.start_paste_with(transcript);
+                if empty {
+                    self.report("transcription-empty");
+                } else {
+                    self.pending_transcript = Some(transcript);
+                    self.report("transcription-nonempty");
                 }
                 self.apply(Event::Transcript { empty });
             }
-            Ok(Err(message)) => self.fail_with_message(&message),
-            Err(()) => self.apply(Event::TranscriptionFailed),
-        }
-    }
-
-    fn start_paste_with(&mut self, transcript: String) {
-        if let Some(paste) = &self.paste {
-            self.paste_receiver = Some(paste.insert(transcript));
+            Ok(Err(message)) => {
+                self.report("transcription-failed");
+                self.fail_with_message(&message)
+            }
+            Err(()) => {
+                self.report("transcription-disconnected");
+                self.apply(Event::TranscriptionFailed)
+            }
         }
     }
 
     fn start_paste(&mut self) {
-        if self.paste_receiver.is_none() {
+        let Some(transcript) = self.pending_transcript.take() else {
+            self.report("paste-missing-pending-result");
             self.apply(Event::PasteFailed);
-        }
+            return;
+        };
+        let Some(paste) = &self.paste else {
+            self.report("paste-unavailable");
+            self.apply(Event::PasteFailed);
+            return;
+        };
+        self.diagnostics.paste_attempts += 1;
+        self.report("paste-requested");
+        self.paste_receiver = Some(paste.insert(transcript));
     }
 
     fn poll_paste(&mut self) {
@@ -378,8 +468,12 @@ impl DictationController {
         };
         self.paste_receiver = None;
         match result {
-            Ok(PasteResult::Inserted) => self.apply(Event::PasteInserted),
+            Ok(PasteResult::Inserted) => {
+                self.report("paste-inserted");
+                self.apply(Event::PasteInserted)
+            }
             Ok(PasteResult::ClipboardOnly) | Err(()) => {
+                self.report("paste-failed");
                 self.fail_with_message("Couldn't paste — transcript is on the clipboard.")
             }
         }
@@ -399,24 +493,51 @@ impl DictationController {
         self.finalize_receiver = None;
         self.transcription_receiver = None;
         self.paste_receiver = None;
+        self.pending_transcript = None;
         self.pressed_at = None;
         self.release_requested = false;
         self.snapshot = None;
         self.remove_temporary_audio();
         self.status.set_text(message);
         self.error_deadline = Some(Instant::now() + ERROR_DURATION);
+        self.report("error");
     }
 
     fn complete(&mut self) {
         self.shortcut.set_recording(false);
         self.snapshot = None;
         self.error_deadline = None;
+        self.pending_transcript = None;
         self.remove_temporary_audio();
         self.status.set_text("Ready.");
+        self.report("complete");
     }
 
     fn remove_temporary_audio(&mut self) {
         remove_temporary_audio(&mut self.temporary_audio);
+    }
+
+    fn report(&self, event: &str) {
+        let summary = format!(
+            "T{} {:?} {event}; capture={} frames={} speech={} longest={} requests={} pastes={}",
+            self.diagnostics.id,
+            self.machine.state,
+            self.diagnostics.capture_ready,
+            self.diagnostics
+                .finalized_frames
+                .map_or_else(|| "pending".to_owned(), |frames| frames.to_string()),
+            self.diagnostics
+                .speech_frames
+                .map_or_else(|| "pending".to_owned(), |frames| frames.to_string()),
+            self.diagnostics
+                .longest_speech_run
+                .map_or_else(|| "pending".to_owned(), |frames| frames.to_string()),
+            self.diagnostics.transcription_requests,
+            self.diagnostics.paste_attempts,
+        );
+        self.diagnostic_status
+            .set_text(&format!("Diagnostic: {summary}"));
+        eprintln!("echo.flow {summary}");
     }
 }
 
@@ -452,7 +573,12 @@ mod tests {
             Some(Effect::FinalizeRecording)
         );
         assert_eq!(machine.state, State::Transcribing);
-        assert_eq!(machine.apply(Event::Finalized), Some(Effect::Transcribe));
+        assert_eq!(
+            machine.apply(Event::Finalized {
+                longest_speech_run: MINIMUM_VOICED_RUN_FRAMES,
+            }),
+            Some(Effect::Transcribe)
+        );
         assert_eq!(
             machine.apply(Event::Transcript { empty: false }),
             Some(Effect::Paste)
@@ -512,7 +638,12 @@ mod tests {
             (State::Idle, Event::Released { long_enough: true }),
             (State::Idle, Event::Escape),
             (State::Recording, Event::Pressed),
-            (State::Recording, Event::Finalized),
+            (
+                State::Recording,
+                Event::Finalized {
+                    longest_speech_run: MINIMUM_VOICED_RUN_FRAMES,
+                },
+            ),
             (State::Transcribing, Event::Pressed),
             (State::Transcribing, Event::Escape),
             (State::Error, Event::Pressed),
@@ -537,5 +668,36 @@ mod tests {
                 "{exit} exit removes its temporary recording"
             );
         }
+    }
+
+    #[test]
+    fn silent_recording_shows_no_speech_without_transcribing_or_pasting() {
+        let mut machine = Machine::new();
+        assert_eq!(machine.apply(Event::Pressed), Some(Effect::StartRecording));
+        assert_eq!(
+            machine.apply(Event::Released { long_enough: true }),
+            Some(Effect::FinalizeRecording)
+        );
+        assert_eq!(
+            machine.apply(Event::Finalized {
+                longest_speech_run: 4,
+            }),
+            Some(Effect::ShowNoSpeech)
+        );
+        assert_eq!(machine.state, State::Error);
+        assert_eq!(machine.apply(Event::Transcript { empty: false }), None);
+        assert_eq!(machine.apply(Event::PasteInserted), None);
+    }
+
+    #[test]
+    fn paste_dispatch_follows_the_transcript_transition() {
+        let mut machine = Machine {
+            state: State::Transcribing,
+        };
+        assert_eq!(
+            machine.apply(Event::Transcript { empty: false }),
+            Some(Effect::Paste)
+        );
+        assert_eq!(machine.state, State::Transcribing);
     }
 }
