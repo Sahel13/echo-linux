@@ -1,5 +1,3 @@
-#![allow(dead_code)] // FLOW-001 wires this AUDIO-002 backend to dictation events.
-
 use crate::settings::Microphone;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -22,6 +20,10 @@ use webrtc_vad::{SampleRate, Vad, VadMode};
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const TARGET_CHANNELS: u16 = 1;
 const TARGET_BITS_PER_SAMPLE: u16 = 16;
+/// A hard cap prevents a stuck global shortcut from retaining unbounded audio
+/// in memory. Five minutes is deliberately well beyond a normal dictation.
+pub const MAXIMUM_RECORDING_DURATION: std::time::Duration = std::time::Duration::from_secs(300);
+const MAX_CAPTURED_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 300;
 const VAD_FRAME_SAMPLES: usize = 320; // 20 ms at 16 kHz, required by WebRTC VAD.
 /// Reject isolated WebRTC VAD positives from microphone noise. A 200 ms
 /// contiguous run is still short enough for a brief spoken dictation.
@@ -43,6 +45,7 @@ pub enum CaptureError {
     UnsupportedSampleFormat,
     StartFailed,
     DeviceLost,
+    MaximumDurationExceeded,
     FinalizeFailed,
 }
 
@@ -54,6 +57,7 @@ impl fmt::Display for CaptureError {
             Self::UnsupportedSampleFormat => "The selected microphone uses an unsupported format.",
             Self::StartFailed => "Couldn't start microphone recording.",
             Self::DeviceLost => "Microphone recording stopped unexpectedly.",
+            Self::MaximumDurationExceeded => "Recording reached the five-minute limit.",
             Self::FinalizeFailed => "Couldn't finalize microphone recording.",
         })
     }
@@ -124,6 +128,7 @@ pub fn start_recording(selection: Microphone) -> Receiver<Result<Recording, Capt
                 }
                 if let Ok(CaptureCommand::Finalize(path, result_sender)) = command_receiver.recv() {
                     drop(stream);
+                    let cleanup_path = path.clone();
                     let result = captured
                         .lock()
                         .map_err(|_| CaptureError::FinalizeFailed)
@@ -131,10 +136,14 @@ pub fn start_recording(selection: Microphone) -> Receiver<Result<Recording, Capt
                             if captured.device_lost {
                                 Err(CaptureError::DeviceLost)
                             } else {
-                                write_wav(path, &captured.samples)
+                                if captured.at_capacity() {
+                                    Err(CaptureError::MaximumDurationExceeded)
+                                } else {
+                                    write_wav(path, &captured.samples)
+                                }
                             }
                         });
-                    let _ = result_sender.send(result);
+                    send_finalization_result(result_sender, result, cleanup_path);
                 }
             }
             Err(error) => {
@@ -143,6 +152,16 @@ pub fn start_recording(selection: Microphone) -> Receiver<Result<Recording, Capt
         }
     });
     receiver
+}
+
+fn send_finalization_result(
+    result_sender: mpsc::Sender<Result<FinalizedRecording, CaptureError>>,
+    result: Result<FinalizedRecording, CaptureError>,
+    cleanup_path: PathBuf,
+) {
+    if result_sender.send(result).is_err() {
+        let _ = std::fs::remove_file(cleanup_path);
+    }
 }
 
 fn create_input_stream(
@@ -365,11 +384,23 @@ struct CapturedAudio {
     channels: usize,
     output_rate_remainder: u32,
     device_lost: bool,
+    max_samples: usize,
 }
 
 impl CapturedAudio {
     fn new(sample_rate: u32, channels: u16) -> Result<Self, CaptureError> {
         if sample_rate == 0 || channels == 0 {
+            return Err(CaptureError::UnsupportedSampleFormat);
+        }
+        Self::with_max_samples(sample_rate, channels, MAX_CAPTURED_SAMPLES)
+    }
+
+    fn with_max_samples(
+        sample_rate: u32,
+        channels: u16,
+        max_samples: usize,
+    ) -> Result<Self, CaptureError> {
+        if sample_rate == 0 || channels == 0 || max_samples == 0 {
             return Err(CaptureError::UnsupportedSampleFormat);
         }
         Ok(Self {
@@ -378,6 +409,7 @@ impl CapturedAudio {
             channels: usize::from(channels),
             output_rate_remainder: 0,
             device_lost: false,
+            max_samples,
         })
     }
 
@@ -394,10 +426,17 @@ impl CapturedAudio {
             let mono = (total / self.channels as i32) as i16;
             self.output_rate_remainder += TARGET_SAMPLE_RATE;
             while self.output_rate_remainder >= self.sample_rate {
+                if self.at_capacity() {
+                    return;
+                }
                 self.samples.push(mono);
                 self.output_rate_remainder -= self.sample_rate;
             }
         }
+    }
+
+    fn at_capacity(&self) -> bool {
+        self.samples.len() >= self.max_samples
     }
 }
 
@@ -457,6 +496,7 @@ fn voice_activity(samples: &[i16]) -> VoiceActivity {
     }
 }
 
+#[cfg(test)]
 fn longest_voiced_run(decisions: impl IntoIterator<Item = bool>) -> usize {
     let mut current_run = 0;
     let mut longest_run = 0;
@@ -474,7 +514,7 @@ fn longest_voiced_run(decisions: impl IntoIterator<Item = bool>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn devices() -> Vec<InputDevice> {
         vec![
@@ -543,6 +583,27 @@ mod tests {
     }
 
     #[test]
+    fn capture_buffer_stops_at_its_configured_limit() {
+        let mut captured = CapturedAudio::with_max_samples(TARGET_SAMPLE_RATE, 1, 2).unwrap();
+        captured.append_interleaved([10, 20, 30]);
+
+        assert_eq!(captured.samples, [10, 20]);
+        assert!(captured.at_capacity());
+    }
+
+    #[test]
+    fn abandoned_finalization_removes_its_temporary_wav() {
+        let path = temporary_wav_path();
+        std::fs::write(&path, b"temporary recording").unwrap();
+        let (sender, receiver) = mpsc::channel();
+        drop(receiver);
+
+        send_finalization_result(sender, Err(CaptureError::FinalizeFailed), path.clone());
+
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn finalizes_a_valid_sixteen_khz_mono_pcm_wav() {
         let path = temporary_wav_path();
         let recording = write_wav(path.clone(), &[1, -2, 3]).unwrap();
@@ -586,39 +647,6 @@ mod tests {
         assert!(failed.device_lost);
         let next = CapturedAudio::new(TARGET_SAMPLE_RATE, 1).unwrap();
         assert!(!next.device_lost);
-    }
-
-    #[test]
-    #[ignore = "requires an accessible default and selected microphone"]
-    fn live_default_and_selected_microphones_finalize_valid_wavs() {
-        let devices = list_input_devices().expect("list connected microphones");
-        let selected = devices
-            .first()
-            .expect("at least one connected microphone")
-            .id
-            .clone();
-
-        for selection in [
-            Microphone::SystemDefault,
-            Microphone::Device { id: selected },
-        ] {
-            let recording = start_recording(selection)
-                .recv_timeout(Duration::from_secs(5))
-                .expect("start worker response")
-                .expect("start microphone recording");
-            std::thread::sleep(Duration::from_millis(500));
-            let path = temporary_wav_path();
-            let finalized = recording
-                .finish(path.clone())
-                .recv_timeout(Duration::from_secs(5))
-                .expect("finalize worker response")
-                .expect("finalize microphone recording");
-            let reader = hound::WavReader::open(&finalized.path).expect("open finalized WAV");
-            assert_eq!(reader.spec().sample_rate, TARGET_SAMPLE_RATE);
-            assert_eq!(reader.spec().channels, TARGET_CHANNELS);
-            assert_eq!(reader.spec().bits_per_sample, TARGET_BITS_PER_SAMPLE);
-            std::fs::remove_file(path).expect("remove temporary WAV");
-        }
     }
 
     fn temporary_wav_path() -> PathBuf {

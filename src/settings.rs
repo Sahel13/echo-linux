@@ -4,7 +4,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 const SETTINGS_VERSION: u32 = 1;
@@ -62,7 +65,7 @@ pub enum Modifier {
     Super,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Model {
     #[serde(rename = "whisper-large-v3-turbo")]
     WhisperLargeV3Turbo,
@@ -70,7 +73,33 @@ pub enum Model {
     WhisperLargeV3,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+impl Model {
+    pub const ALL: [Self; 2] = [Self::WhisperLargeV3Turbo, Self::WhisperLargeV3];
+
+    pub const fn label(self) -> &'static str {
+        self.groq_id()
+    }
+
+    pub const fn groq_id(self) -> &'static str {
+        match self {
+            Self::WhisperLargeV3Turbo => "whisper-large-v3-turbo",
+            Self::WhisperLargeV3 => "whisper-large-v3",
+        }
+    }
+
+    pub fn from_index(index: u32) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::WhisperLargeV3Turbo => 0,
+            Self::WhisperLargeV3 => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Language {
     #[serde(rename = "")]
     AutoDetect,
@@ -102,11 +131,113 @@ pub enum Language {
     Russian,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+impl Language {
+    pub const ALL: [Self; 14] = [
+        Self::AutoDetect,
+        Self::English,
+        Self::Spanish,
+        Self::French,
+        Self::German,
+        Self::Italian,
+        Self::Portuguese,
+        Self::Dutch,
+        Self::Hindi,
+        Self::Arabic,
+        Self::Chinese,
+        Self::Japanese,
+        Self::Korean,
+        Self::Russian,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AutoDetect => "Auto-detect",
+            Self::English => "English",
+            Self::Spanish => "Spanish",
+            Self::French => "French",
+            Self::German => "German",
+            Self::Italian => "Italian",
+            Self::Portuguese => "Portuguese",
+            Self::Dutch => "Dutch",
+            Self::Hindi => "Hindi",
+            Self::Arabic => "Arabic",
+            Self::Chinese => "Chinese",
+            Self::Japanese => "Japanese",
+            Self::Korean => "Korean",
+            Self::Russian => "Russian",
+        }
+    }
+
+    pub const fn groq_code(self) -> Option<&'static str> {
+        match self {
+            Self::AutoDetect => None,
+            Self::English => Some("en"),
+            Self::Spanish => Some("es"),
+            Self::French => Some("fr"),
+            Self::German => Some("de"),
+            Self::Italian => Some("it"),
+            Self::Portuguese => Some("pt"),
+            Self::Dutch => Some("nl"),
+            Self::Hindi => Some("hi"),
+            Self::Arabic => Some("ar"),
+            Self::Chinese => Some("zh"),
+            Self::Japanese => Some("ja"),
+            Self::Korean => Some("ko"),
+            Self::Russian => Some("ru"),
+        }
+    }
+
+    pub fn from_index(index: u32) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::AutoDetect => 0,
+            Self::English => 1,
+            Self::Spanish => 2,
+            Self::French => 3,
+            Self::German => 4,
+            Self::Italian => 5,
+            Self::Portuguese => 6,
+            Self::Dutch => 7,
+            Self::Hindi => 8,
+            Self::Arabic => 9,
+            Self::Chinese => 10,
+            Self::Japanese => 11,
+            Self::Korean => 12,
+            Self::Russian => 13,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Style {
     Normal,
     #[serde(rename = "lower_case")]
     LowerCase,
+}
+
+impl Style {
+    pub const ALL: [Self; 2] = [Self::Normal, Self::LowerCase];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::LowerCase => "Lower Case",
+        }
+    }
+
+    pub fn from_index(index: u32) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::Normal => 0,
+            Self::LowerCase => 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -167,6 +298,7 @@ impl std::error::Error for SettingsError {}
 #[derive(Clone, Debug)]
 pub struct SettingsStore {
     path: PathBuf,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl SettingsStore {
@@ -178,7 +310,10 @@ impl SettingsStore {
     }
 
     pub fn at(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            write_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn load(&self) -> Result<Settings, SettingsError> {
@@ -193,6 +328,26 @@ impl SettingsStore {
     }
 
     pub fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
+        let _write = self
+            .write_lock
+            .lock()
+            .expect("settings write lock poisoned");
+        self.save_unlocked(settings)
+    }
+
+    /// Update only the cumulative word total without overwriting settings that
+    /// may have changed while transcription was running on a worker thread.
+    pub fn update_total_words(&self, total_words: u64) -> Result<(), SettingsError> {
+        let _write = self
+            .write_lock
+            .lock()
+            .expect("settings write lock poisoned");
+        let mut settings = self.load()?;
+        settings.total_words = settings.total_words.max(total_words);
+        self.save_unlocked(&settings)
+    }
+
+    fn save_unlocked(&self, settings: &Settings) -> Result<(), SettingsError> {
         let contents = encode_settings(settings)?;
         write_atomically(&self.path, contents.as_bytes()).map_err(|source| SettingsError::Write {
             path: self.path.clone(),
@@ -397,6 +552,35 @@ mod tests {
             restarted_store.load().expect("settings reload succeeds"),
             settings
         );
+
+        fs::remove_dir_all(path.parent().expect("settings parent directory"))
+            .expect("test settings directory removal succeeds");
+    }
+
+    #[test]
+    fn updating_the_word_total_preserves_newer_settings_and_never_regresses() {
+        let path = temporary_settings_path();
+        let store = SettingsStore::at(path.clone());
+        let mut newer = changed_settings();
+        newer.vocabulary = "newer vocabulary".into();
+        newer.total_words = 50;
+        store.save(&newer).expect("newer settings save succeeds");
+
+        store
+            .update_total_words(42)
+            .expect("older history save merges successfully");
+        assert_eq!(
+            store.load().expect("merged settings load"),
+            newer,
+            "an older detached save cannot overwrite newer settings"
+        );
+
+        store
+            .update_total_words(64)
+            .expect("newer history save merges successfully");
+        let merged = store.load().expect("merged settings load");
+        assert_eq!(merged.vocabulary, "newer vocabulary");
+        assert_eq!(merged.total_words, 64);
 
         fs::remove_dir_all(path.parent().expect("settings parent directory"))
             .expect("test settings directory removal succeeds");

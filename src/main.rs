@@ -132,10 +132,10 @@ fn activate(
         let shortcut_status = gtk::Label::new(Some("Starting global shortcut…"));
         shortcut_status.set_halign(gtk::Align::Start);
         shortcut_status.set_wrap(true);
-        shortcut::binding_from_settings(&settings.borrow().shortcut).map(|binding| {
-            let (controller, events) = start_shortcut_backend(binding);
-            (Rc::new(controller), events, shortcut_status)
-        })
+        let binding = shortcut::binding_from_settings(&settings.borrow().shortcut)
+            .unwrap_or_else(default_shortcut_binding);
+        let (controller, events) = start_shortcut_backend(binding);
+        Some((Rc::new(controller), events, shortcut_status))
     } else {
         None
     };
@@ -413,25 +413,6 @@ fn install_general_controls(window: &adw::ApplicationWindow, content: &gtk::Box)
     });
 }
 
-const MODEL_NAMES: [&str; 2] = ["whisper-large-v3-turbo", "whisper-large-v3"];
-const LANGUAGE_NAMES: [&str; 14] = [
-    "Auto-detect",
-    "English",
-    "Spanish",
-    "French",
-    "German",
-    "Italian",
-    "Portuguese",
-    "Dutch",
-    "Hindi",
-    "Arabic",
-    "Chinese",
-    "Japanese",
-    "Korean",
-    "Russian",
-];
-const STYLE_NAMES: [&str; 2] = ["Normal", "Lower Case"];
-
 fn install_transcription_controls(
     content: &gtk::Box,
     store: Option<settings::SettingsStore>,
@@ -442,8 +423,9 @@ fn install_transcription_controls(
     let model_label = gtk::Label::with_mnemonic("_Model");
     model_label.set_halign(gtk::Align::Start);
     content.append(&model_label);
-    let model = gtk::DropDown::from_strings(&MODEL_NAMES);
-    model.set_selected(model_index(&settings.borrow().model));
+    let model_names = settings::Model::ALL.map(|model| model.label());
+    let model = gtk::DropDown::from_strings(&model_names);
+    model.set_selected(settings.borrow().model.index());
     model.update_property(&[gtk::accessible::Property::Label(MODEL_CONTROL)]);
     model_label.set_mnemonic_widget(Some(&model));
     content.append(&model);
@@ -451,8 +433,9 @@ fn install_transcription_controls(
     let language_label = gtk::Label::with_mnemonic("L_anguage");
     language_label.set_halign(gtk::Align::Start);
     content.append(&language_label);
-    let language = gtk::DropDown::from_strings(&LANGUAGE_NAMES);
-    language.set_selected(language_index(&settings.borrow().language));
+    let language_names = settings::Language::ALL.map(|language| language.label());
+    let language = gtk::DropDown::from_strings(&language_names);
+    language.set_selected(settings.borrow().language.index());
     language.update_property(&[gtk::accessible::Property::Label(LANGUAGE_CONTROL)]);
     language_label.set_mnemonic_widget(Some(&language));
     content.append(&language);
@@ -460,8 +443,9 @@ fn install_transcription_controls(
     let style_label = gtk::Label::with_mnemonic("_Style");
     style_label.set_halign(gtk::Align::Start);
     content.append(&style_label);
-    let style = gtk::DropDown::from_strings(&STYLE_NAMES);
-    style.set_selected(style_index(&settings.borrow().style));
+    let style_names = settings::Style::ALL.map(|style| style.label());
+    let style = gtk::DropDown::from_strings(&style_names);
+    style.set_selected(settings.borrow().style.index());
     style.update_property(&[gtk::accessible::Property::Label(STYLE_CONTROL)]);
     style_label.set_mnemonic_widget(Some(&style));
     content.append(&style);
@@ -486,7 +470,7 @@ fn install_transcription_controls(
         let store = store.clone();
         let status = status.clone();
         move |model| {
-            let Some(selected) = model_from_index(model.selected()) else {
+            let Some(selected) = settings::Model::from_index(model.selected()) else {
                 return;
             };
             settings.borrow_mut().model = selected;
@@ -499,7 +483,7 @@ fn install_transcription_controls(
         let store = store.clone();
         let status = status.clone();
         move |language| {
-            let Some(selected) = language_from_index(language.selected()) else {
+            let Some(selected) = settings::Language::from_index(language.selected()) else {
                 return;
             };
             settings.borrow_mut().language = selected;
@@ -512,7 +496,7 @@ fn install_transcription_controls(
         let store = store.clone();
         let status = status.clone();
         move |style| {
-            let Some(selected) = style_from_index(style.selected()) else {
+            let Some(selected) = settings::Style::from_index(style.selected()) else {
                 return;
             };
             settings.borrow_mut().style = selected;
@@ -558,75 +542,6 @@ fn update_transcription_status(
         }
         Some(_) => status.set_text("Couldn't save transcription settings."),
         None => status.set_text("Settings storage is unavailable."),
-    }
-}
-
-fn model_index(model: &settings::Model) -> u32 {
-    match model {
-        settings::Model::WhisperLargeV3Turbo => 0,
-        settings::Model::WhisperLargeV3 => 1,
-    }
-}
-
-fn model_from_index(index: u32) -> Option<settings::Model> {
-    match index {
-        0 => Some(settings::Model::WhisperLargeV3Turbo),
-        1 => Some(settings::Model::WhisperLargeV3),
-        _ => None,
-    }
-}
-
-fn language_index(language: &settings::Language) -> u32 {
-    match language {
-        settings::Language::AutoDetect => 0,
-        settings::Language::English => 1,
-        settings::Language::Spanish => 2,
-        settings::Language::French => 3,
-        settings::Language::German => 4,
-        settings::Language::Italian => 5,
-        settings::Language::Portuguese => 6,
-        settings::Language::Dutch => 7,
-        settings::Language::Hindi => 8,
-        settings::Language::Arabic => 9,
-        settings::Language::Chinese => 10,
-        settings::Language::Japanese => 11,
-        settings::Language::Korean => 12,
-        settings::Language::Russian => 13,
-    }
-}
-
-fn language_from_index(index: u32) -> Option<settings::Language> {
-    Some(match index {
-        0 => settings::Language::AutoDetect,
-        1 => settings::Language::English,
-        2 => settings::Language::Spanish,
-        3 => settings::Language::French,
-        4 => settings::Language::German,
-        5 => settings::Language::Italian,
-        6 => settings::Language::Portuguese,
-        7 => settings::Language::Dutch,
-        8 => settings::Language::Hindi,
-        9 => settings::Language::Arabic,
-        10 => settings::Language::Chinese,
-        11 => settings::Language::Japanese,
-        12 => settings::Language::Korean,
-        13 => settings::Language::Russian,
-        _ => return None,
-    })
-}
-
-fn style_index(style: &settings::Style) -> u32 {
-    match style {
-        settings::Style::Normal => 0,
-        settings::Style::LowerCase => 1,
-    }
-}
-
-fn style_from_index(index: u32) -> Option<settings::Style> {
-    match index {
-        0 => Some(settings::Style::Normal),
-        1 => Some(settings::Style::LowerCase),
-        _ => None,
     }
 }
 
@@ -859,6 +774,11 @@ fn start_shortcut_backend(
     (controller, receiver)
 }
 
+fn default_shortcut_binding() -> shortcut::Binding {
+    shortcut::binding_from_settings(&settings::Shortcut::default())
+        .expect("the built-in default shortcut is a valid GDK key")
+}
+
 fn shortcut_status_message(event: shortcut::ShortcutEvent) -> &'static str {
     match event {
         shortcut::ShortcutEvent::Active => "Global shortcut is active.",
@@ -896,7 +816,7 @@ fn load_settings() -> (
 fn shortcut_display(shortcut: &settings::Shortcut) -> String {
     shortcut::binding_from_settings(shortcut)
         .map(|binding| shortcut::display_name(&binding))
-        .unwrap_or_else(|| shortcut.key.clone())
+        .unwrap_or_else(|| format!("{} (invalid — choose Change shortcut)", shortcut.key))
 }
 
 fn install_shortcut_capture(
@@ -1036,10 +956,25 @@ mod tests {
     }
 
     #[test]
+    fn invalid_saved_shortcut_uses_a_temporary_default_for_recovery() {
+        let invalid = settings::Shortcut {
+            key: "not-a-gdk-key".into(),
+            modifiers: vec![],
+        };
+
+        assert!(shortcut::binding_from_settings(&invalid).is_none());
+        assert_eq!(default_shortcut_binding().key, "F10");
+        assert!(shortcut_display(&invalid).contains("choose Change shortcut"));
+    }
+
+    #[test]
     fn transcription_control_options_cover_every_required_choice() {
-        assert_eq!(MODEL_NAMES, ["whisper-large-v3-turbo", "whisper-large-v3"]);
         assert_eq!(
-            LANGUAGE_NAMES,
+            settings::Model::ALL.map(|model| model.label()),
+            ["whisper-large-v3-turbo", "whisper-large-v3"]
+        );
+        assert_eq!(
+            settings::Language::ALL.map(|language| language.label()),
             [
                 "Auto-detect",
                 "English",
@@ -1057,19 +992,22 @@ mod tests {
                 "Russian",
             ]
         );
-        assert_eq!(STYLE_NAMES, ["Normal", "Lower Case"]);
+        assert_eq!(
+            settings::Style::ALL.map(|style| style.label()),
+            ["Normal", "Lower Case"]
+        );
 
-        for index in 0..LANGUAGE_NAMES.len() as u32 {
-            let language = language_from_index(index).expect("listed language has a setting");
-            assert_eq!(language_index(&language), index);
+        for (index, language) in settings::Language::ALL.into_iter().enumerate() {
+            assert_eq!(settings::Language::from_index(index as u32), Some(language));
+            assert_eq!(language.index(), index as u32);
         }
-        for index in 0..MODEL_NAMES.len() as u32 {
-            let model = model_from_index(index).expect("listed model has a setting");
-            assert_eq!(model_index(&model), index);
+        for (index, model) in settings::Model::ALL.into_iter().enumerate() {
+            assert_eq!(settings::Model::from_index(index as u32), Some(model));
+            assert_eq!(model.index(), index as u32);
         }
-        for index in 0..STYLE_NAMES.len() as u32 {
-            let style = style_from_index(index).expect("listed style has a setting");
-            assert_eq!(style_index(&style), index);
+        for (index, style) in settings::Style::ALL.into_iter().enumerate() {
+            assert_eq!(settings::Style::from_index(index as u32), Some(style));
+            assert_eq!(style.index(), index as u32);
         }
     }
 

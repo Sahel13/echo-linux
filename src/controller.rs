@@ -1,5 +1,7 @@
 use crate::{
-    audio::{self, FinalizedRecording, Recording, MINIMUM_VOICED_RUN_FRAMES},
+    audio::{
+        self, FinalizedRecording, Recording, MAXIMUM_RECORDING_DURATION, MINIMUM_VOICED_RUN_FRAMES,
+    },
     groq,
     history::History,
     overlay::Overlay,
@@ -216,6 +218,13 @@ impl DictationController {
     }
 
     pub fn tick(&mut self) {
+        if self.machine.state == State::Recording
+            && self
+                .pressed_at
+                .is_some_and(|pressed_at| pressed_at.elapsed() >= MAXIMUM_RECORDING_DURATION)
+        {
+            self.fail_with_message("Recording reached the five-minute limit.");
+        }
         self.poll_recording_start();
         self.poll_finalization();
         self.poll_transcription();
@@ -448,11 +457,10 @@ impl DictationController {
                 .set_text("Last transcript is ready, but the word total couldn't be saved.");
             return;
         };
-        let settings = self.settings.borrow().clone();
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             let result = store
-                .save(&settings)
+                .update_total_words(total_words)
                 .map_err(|_| "Couldn't save the lifetime word total.".to_owned());
             let _ = sender.send(result);
         });
@@ -513,6 +521,12 @@ impl DictationController {
 
     fn remove_temporary_audio(&mut self) {
         remove_temporary_audio(&mut self.temporary_audio);
+    }
+}
+
+impl Drop for DictationController {
+    fn drop(&mut self) {
+        self.remove_temporary_audio();
     }
 }
 

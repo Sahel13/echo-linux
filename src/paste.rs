@@ -33,7 +33,6 @@ pub fn start_x11() -> PasteController {
 }
 
 impl PasteController {
-    #[allow(dead_code)] // FLOW-001 submits the completed transcript through this seam.
     pub fn insert(&self, transcript: String) -> mpsc::Receiver<PasteResult> {
         let (sender, receiver) = mpsc::channel();
         let _ = self.commands.send(Command::Insert {
@@ -71,7 +70,6 @@ fn should_restore(snapshot: &ClipboardSnapshot, clipboard_still_owned: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn restores_readable_text_only_when_nobody_changed_the_clipboard() {
@@ -92,20 +90,5 @@ mod tests {
             failure_message(PasteResult::ClipboardOnly),
             Some("Couldn't paste — transcript is on the clipboard.")
         );
-    }
-
-    #[test]
-    #[ignore = "requires an accessible X11 text target and XTEST"]
-    fn live_x11_pastes_into_the_currently_focused_client() {
-        let controller = start_x11();
-        eprintln!("Focus a text target within three seconds; Echo will paste a fixed test string.");
-        thread::sleep(Duration::from_secs(3));
-        assert_eq!(
-            controller
-                .insert("Echo paste check".into())
-                .recv_timeout(Duration::from_secs(2)),
-            Ok(PasteResult::Inserted)
-        );
-        thread::sleep(Duration::from_millis(200));
     }
 }

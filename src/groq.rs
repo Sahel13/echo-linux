@@ -1,6 +1,4 @@
-#![allow(dead_code)] // FLOW-001 runs this client on its transcription worker.
-
-use crate::settings::{Language, Model, Settings, Style};
+use crate::settings::{Settings, Style};
 use reqwest::{
     blocking::{
         multipart::{Form, Part},
@@ -70,13 +68,13 @@ impl GroqClient {
             .map_err(|_| GroqError::AudioFileUnavailable)?;
         let mut form = Form::new()
             .part("file", file)
-            .text("model", model_id(&settings.model))
+            .text("model", settings.model.groq_id())
             .text(
                 "prompt",
                 transcription_prompt(&settings.vocabulary, &settings.style),
             )
             .text("response_format", "json");
-        if let Some(language) = language_code(&settings.language) {
+        if let Some(language) = settings.language.groq_code() {
             form = form.text("language", language);
         }
 
@@ -160,32 +158,6 @@ fn network_failure(error: &reqwest::Error) -> NetworkFailure {
         NetworkFailure::Unreachable
     } else {
         NetworkFailure::Other
-    }
-}
-
-fn model_id(model: &Model) -> &'static str {
-    match model {
-        Model::WhisperLargeV3Turbo => "whisper-large-v3-turbo",
-        Model::WhisperLargeV3 => "whisper-large-v3",
-    }
-}
-
-fn language_code(language: &Language) -> Option<&'static str> {
-    match language {
-        Language::AutoDetect => None,
-        Language::English => Some("en"),
-        Language::Spanish => Some("es"),
-        Language::French => Some("fr"),
-        Language::German => Some("de"),
-        Language::Italian => Some("it"),
-        Language::Portuguese => Some("pt"),
-        Language::Dutch => Some("nl"),
-        Language::Hindi => Some("hi"),
-        Language::Arabic => Some("ar"),
-        Language::Chinese => Some("zh"),
-        Language::Japanese => Some("ja"),
-        Language::Korean => Some("ko"),
-        Language::Russian => Some("ru"),
     }
 }
 
@@ -274,6 +246,7 @@ struct TranscriptionResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{Language, Model};
     use std::{
         io::{Read, Write},
         net::{TcpListener, TcpStream},
