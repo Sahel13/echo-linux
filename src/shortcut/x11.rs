@@ -19,7 +19,7 @@ use x11rb::{
 const NUM_LOCK_KEYSYM: u32 = 0xff7f;
 const ESCAPE_KEYSYM: u32 = 0xff1b;
 const FALLBACK_RELEASE_DELAY: Duration = Duration::from_millis(30);
-const POLL_INTERVAL: Duration = Duration::from_millis(5);
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub struct X11ShortcutBackend;
 
@@ -37,18 +37,21 @@ impl ShortcutBackend for X11ShortcutBackend {
 
         let root = connection.setup().roots[screen].root;
         let detectable_auto_repeat = enable_detectable_auto_repeat(&connection);
-        let mut binding = match GrabbedBinding::resolve(&connection, root, &initial_binding) {
-            Ok(binding) => binding,
+        let mut requested_binding = initial_binding;
+        let mut binding = match GrabbedBinding::resolve(&connection, root, &requested_binding) {
+            Ok(binding) => Some(binding),
             Err(GrabError::Conflict) => {
                 let _ = sender.send(ShortcutEvent::Conflict);
-                return;
+                None
             }
             Err(GrabError::Unavailable) => {
                 let _ = sender.send(ShortcutEvent::Unavailable);
                 return;
             }
         };
-        let _ = sender.send(ShortcutEvent::Active);
+        if binding.is_some() {
+            let _ = sender.send(ShortcutEvent::Active);
+        }
 
         let mut repeat_filter = RepeatFilter::new(detectable_auto_repeat);
         let mut escape_grab = None;
@@ -59,14 +62,20 @@ impl ShortcutBackend for X11ShortcutBackend {
                         binding: requested,
                         result,
                     } => {
-                        if requested == binding.requested {
+                        if binding
+                            .as_ref()
+                            .is_some_and(|binding| requested == binding.requested)
+                        {
                             let _ = result.send(UpdateResult::Applied);
                             continue;
                         }
                         match GrabbedBinding::resolve(&connection, root, &requested) {
                             Ok(new_binding) => {
-                                binding.ungrab(&connection);
-                                binding = new_binding;
+                                if let Some(binding) = binding.take() {
+                                    binding.ungrab(&connection);
+                                }
+                                requested_binding = requested;
+                                binding = Some(new_binding);
                                 let _ = result.send(UpdateResult::Applied);
                                 let _ = sender.send(ShortcutEvent::Active);
                             }
@@ -102,10 +111,18 @@ impl ShortcutBackend for X11ShortcutBackend {
                         {
                             vec![ShortcutEvent::Escape]
                         }
-                        Event::KeyPress(event) if event.detail == binding.keycode => {
+                        Event::KeyPress(event)
+                            if binding
+                                .as_ref()
+                                .is_some_and(|binding| event.detail == binding.keycode) =>
+                        {
                             repeat_filter.key_press(event.time)
                         }
-                        Event::KeyRelease(event) if event.detail == binding.keycode => {
+                        Event::KeyRelease(event)
+                            if binding
+                                .as_ref()
+                                .is_some_and(|binding| event.detail == binding.keycode) =>
+                        {
                             repeat_filter.key_release(event.time)
                         }
                         Event::MappingNotify(event)
@@ -113,14 +130,17 @@ impl ShortcutBackend for X11ShortcutBackend {
                                 || event.request == Mapping::MODIFIER =>
                         {
                             send_events(&sender, repeat_filter.flush());
-                            binding.ungrab(&connection);
+                            if let Some(binding) = binding.take() {
+                                requested_binding = binding.requested.clone();
+                                binding.ungrab(&connection);
+                            }
                             let was_recording = escape_grab.is_some();
                             if let Some(grab) = escape_grab.take() {
                                 grab.ungrab(&connection);
                             }
-                            match GrabbedBinding::resolve(&connection, root, &binding.requested) {
+                            match GrabbedBinding::resolve(&connection, root, &requested_binding) {
                                 Ok(new_binding) => {
-                                    binding = new_binding;
+                                    binding = Some(new_binding);
                                     if was_recording {
                                         escape_grab = EscapeGrab::resolve(&connection, root).ok();
                                         if escape_grab.is_none() {
@@ -131,7 +151,6 @@ impl ShortcutBackend for X11ShortcutBackend {
                                 }
                                 Err(GrabError::Conflict) => {
                                     let _ = sender.send(ShortcutEvent::Conflict);
-                                    return;
                                 }
                                 Err(GrabError::Unavailable) => {
                                     let _ = sender.send(ShortcutEvent::Unavailable);
@@ -150,7 +169,7 @@ impl ShortcutBackend for X11ShortcutBackend {
                 }
                 Ok(None) => {
                     send_events(&sender, repeat_filter.release_if_due());
-                    thread::sleep(POLL_INTERVAL);
+                    thread::sleep(IDLE_POLL_INTERVAL);
                 }
                 Err(_) => {
                     let _ = sender.send(ShortcutEvent::Unavailable);

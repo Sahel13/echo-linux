@@ -169,11 +169,19 @@ fn activate(
     api_key_actions.append(&remove_api_key);
     content.append(&api_key_actions);
 
-    start_secret_operation(SecretOperation::Check, api_key_status.clone());
+    start_secret_operation(
+        SecretOperation::Check,
+        api_key_status.clone(),
+        api_key_input.clone(),
+        save_api_key.clone(),
+        remove_api_key.clone(),
+    );
 
     save_api_key.connect_clicked({
         let api_key_input = api_key_input.clone();
         let api_key_status = api_key_status.clone();
+        let save_api_key = save_api_key.clone();
+        let remove_api_key = remove_api_key.clone();
         move |_| {
             let key = api_key_input.text().to_string();
             api_key_input.set_text("");
@@ -183,15 +191,30 @@ fn activate(
             }
 
             api_key_status.set_text("Saving API key…");
-            start_secret_operation(SecretOperation::Save(key), api_key_status.clone());
+            start_secret_operation(
+                SecretOperation::Save(key),
+                api_key_status.clone(),
+                api_key_input.clone(),
+                save_api_key.clone(),
+                remove_api_key.clone(),
+            );
         }
     });
 
     remove_api_key.connect_clicked({
         let api_key_status = api_key_status.clone();
+        let api_key_input = api_key_input.clone();
+        let save_api_key = save_api_key.clone();
+        let remove_api_key = remove_api_key.clone();
         move |_| {
             api_key_status.set_text("Removing API key…");
-            start_secret_operation(SecretOperation::Remove, api_key_status.clone());
+            start_secret_operation(
+                SecretOperation::Remove,
+                api_key_status.clone(),
+                api_key_input.clone(),
+                save_api_key.clone(),
+                remove_api_key.clone(),
+            );
         }
     });
 
@@ -497,13 +520,29 @@ fn install_transcription_controls(
         }
     });
 
+    let vocabulary_save = Rc::new(RefCell::new(None::<gtk::glib::SourceId>));
     vocabulary.connect_changed({
         let settings = settings.clone();
         let store = store.clone();
         let status = status.clone();
+        let vocabulary_save = vocabulary_save.clone();
         move |vocabulary| {
             settings.borrow_mut().vocabulary = vocabulary.text().into();
-            update_transcription_status(&status, &store, &settings);
+            if let Some(pending) = vocabulary_save.borrow_mut().take() {
+                pending.remove();
+            }
+            let settings = settings.clone();
+            let store = store.clone();
+            let status = status.clone();
+            let vocabulary_save = vocabulary_save.clone();
+            let completed_save = vocabulary_save.clone();
+            *vocabulary_save.borrow_mut() = Some(gtk::glib::timeout_add_local_once(
+                Duration::from_millis(500),
+                move || {
+                    completed_save.borrow_mut().take();
+                    update_transcription_status(&status, &store, &settings);
+                },
+            ));
         }
     });
 }
@@ -678,10 +717,6 @@ fn install_microphone_selector(
     });
 
     refresh_devices();
-    gtk::glib::timeout_add_local(Duration::from_secs(2), move || {
-        refresh_devices();
-        gtk::glib::ControlFlow::Continue
-    });
 }
 
 fn start_microphone_refresh(
@@ -757,7 +792,16 @@ enum SecretOperationResult {
     Remove(Result<(), secret::SecretError>),
 }
 
-fn start_secret_operation(operation: SecretOperation, status: gtk::Label) {
+fn start_secret_operation(
+    operation: SecretOperation,
+    status: gtk::Label,
+    input: gtk::PasswordEntry,
+    save: gtk::Button,
+    remove: gtk::Button,
+) {
+    input.set_sensitive(false);
+    save.set_sensitive(false);
+    remove.set_sensitive(false);
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let result = match operation {
@@ -772,11 +816,17 @@ fn start_secret_operation(operation: SecretOperation, status: gtk::Label) {
         match receiver.try_recv() {
             Ok(result) => {
                 status.set_text(secret_operation_message(result));
+                input.set_sensitive(true);
+                save.set_sensitive(true);
+                remove.set_sensitive(true);
                 gtk::glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
                 status.set_text("Couldn't access secure API-key storage. Check that your desktop keyring is running.");
+                input.set_sensitive(true);
+                save.set_sensitive(true);
+                remove.set_sensitive(true);
                 gtk::glib::ControlFlow::Break
             }
         }

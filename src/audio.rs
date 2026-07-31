@@ -8,6 +8,8 @@ use cpal::{
 use std::{
     collections::HashSet,
     fmt,
+    fs::OpenOptions,
+    os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{
         mpsc::{self, Receiver},
@@ -406,8 +408,13 @@ fn write_wav(path: PathBuf, samples: &[i16]) -> Result<FinalizedRecording, Captu
         bits_per_sample: TARGET_BITS_PER_SAMPLE,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer =
-        hound::WavWriter::create(&path, spec).map_err(|_| CaptureError::FinalizeFailed)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|_| CaptureError::FinalizeFailed)?;
+    let mut writer = hound::WavWriter::new(file, spec).map_err(|_| CaptureError::FinalizeFailed)?;
     for sample in samples {
         writer
             .write_sample(*sample)
@@ -548,6 +555,11 @@ mod tests {
         assert_eq!(recording.frames, 3);
         assert_eq!(recording.speech_frames, 0);
         assert_eq!(recording.longest_speech_run, 0);
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         std::fs::remove_file(path).unwrap();
     }
 
