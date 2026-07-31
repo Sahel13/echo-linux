@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="512" y1="0" x2="512" y2="716.8" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0f1927"/>
+      <stop offset="1" stop-color="#0b1a31"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#background)"/>
+  <image x="120" y="384" width="784" height="395" xlink:href="echo-app-mark.svg" href="echo-app-mark.svg"/>
+</svg>

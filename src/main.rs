@@ -92,9 +92,14 @@ fn activate(
         .build();
 
     let branding = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let icon = gtk::Image::from_icon_name("audio-input-microphone-symbolic");
+    let icon = match gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_static(include_bytes!(
+        "../assets/echo.png"
+    ))) {
+        Ok(texture) => gtk::Image::from_paintable(Some(&texture)),
+        Err(_) => gtk::Image::from_icon_name("echo"),
+    };
     icon.set_pixel_size(24);
-    icon.update_property(&[gtk::accessible::Property::Label("Echo microphone icon")]);
+    icon.update_property(&[gtk::accessible::Property::Label("Echo icon")]);
     branding.append(&icon);
     let window_title = adw::WindowTitle::new("Echo", "Hold your shortcut to dictate");
     branding.append(&window_title);
@@ -207,7 +212,7 @@ fn activate(
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title("Echo")
-        .icon_name("audio-input-microphone-symbolic")
+        .icon_name("echo")
         .default_width(480)
         .default_height(680)
         .content(&shell)
