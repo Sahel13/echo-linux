@@ -12,6 +12,8 @@ use crate::{
 };
 use gtk::prelude::WidgetExt;
 use std::{
+    env, fs, io,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -178,6 +180,9 @@ impl DictationController {
         paste: Option<PasteController>,
         overlay: Overlay,
     ) -> Self {
+        // A failed cleanup must not prevent the application from launching;
+        // finalization reports a useful error if private storage is unavailable.
+        let _ = recording_directory();
         Self {
             machine: Machine::new(),
             settings,
@@ -298,7 +303,13 @@ impl DictationController {
             return;
         };
         self.release_requested = false;
-        let path = temporary_recording_path();
+        let path = match temporary_recording_path() {
+            Ok(path) => path,
+            Err(_) => {
+                self.fail_with_message("Couldn't prepare private recording storage.");
+                return;
+            }
+        };
         self.temporary_audio = Some(path.clone());
         self.finalize_receiver = Some(recording.finish(path));
     }
@@ -530,16 +541,64 @@ impl Drop for DictationController {
     }
 }
 
-fn temporary_recording_path() -> PathBuf {
+fn temporary_recording_path() -> io::Result<PathBuf> {
+    let directory = recording_directory()?;
+    Ok(temporary_recording_path_in(&directory))
+}
+
+fn temporary_recording_path_in(directory: &std::path::Path) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let counter = RECORDING_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
+    directory.join(format!(
         "echo-recording-{}-{timestamp}-{counter}.wav",
         std::process::id()
     ))
+}
+
+fn recording_directory() -> io::Result<PathBuf> {
+    let runtime_directory = env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unavailable"))?;
+    let directory = runtime_directory.join("echo");
+    initialize_recording_directory(&directory)?;
+    Ok(directory)
+}
+
+fn initialize_recording_directory(directory: &std::path::Path) -> io::Result<()> {
+    fs::create_dir_all(directory)?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    cleanup_stale_recordings(directory)
+}
+
+fn cleanup_stale_recordings(directory: &std::path::Path) -> io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_file() && recording_belongs_to_dead_process(&path) {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
+}
+
+fn recording_belongs_to_dead_process(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(identifier) = name
+        .strip_prefix("echo-recording-")
+        .and_then(|name| name.split_once('-').map(|(pid, _)| pid))
+    else {
+        return false;
+    };
+    let Ok(pid) = identifier.parse::<u32>() else {
+        return false;
+    };
+    !PathBuf::from("/proc").join(pid.to_string()).exists()
 }
 
 fn remove_temporary_audio(temporary_audio: &mut Option<PathBuf>) {
@@ -647,8 +706,10 @@ mod tests {
 
     #[test]
     fn temporary_audio_is_removed_after_every_terminal_exit() {
+        let directory = test_recording_directory();
+        initialize_recording_directory(&directory).expect("private recording directory is ready");
         for exit in ["success", "empty", "cancelled", "failure"] {
-            let path = temporary_recording_path();
+            let path = temporary_recording_path_in(&directory);
             std::fs::write(&path, b"temporary audio").expect("temporary recording is written");
             let mut temporary_audio = Some(path.clone());
             remove_temporary_audio(&mut temporary_audio);
@@ -657,6 +718,29 @@ mod tests {
                 "{exit} exit removes its temporary recording"
             );
         }
+        std::fs::remove_dir_all(directory).expect("test recording directory is removed");
+    }
+
+    #[test]
+    fn recording_directory_is_private_and_cleans_up_crash_leftovers() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = test_recording_directory();
+        std::fs::create_dir_all(&directory).expect("test recording directory is created");
+        let stale = directory.join("echo-recording-4294967295-1-0.wav");
+        let active = directory.join(format!("echo-recording-{}-1-0.wav", std::process::id()));
+        std::fs::write(&stale, b"stale recording").expect("stale recording is written");
+        std::fs::write(&active, b"active recording").expect("active recording is written");
+
+        initialize_recording_directory(&directory).expect("recording directory is initialized");
+
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(!stale.exists());
+        assert!(active.exists());
+        std::fs::remove_dir_all(directory).expect("test recording directory is removed");
     }
 
     #[test]
@@ -688,5 +772,13 @@ mod tests {
             Some(Effect::Paste)
         );
         assert_eq!(machine.state, State::Transcribing);
+    }
+
+    fn test_recording_directory() -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("echo-controller-test-{timestamp}"))
     }
 }

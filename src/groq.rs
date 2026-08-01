@@ -7,9 +7,19 @@ use reqwest::{
     StatusCode,
 };
 use serde::Deserialize;
-use std::{error::Error as _, fmt, io::ErrorKind, path::Path, time::Duration};
+use std::{
+    error::Error as _,
+    fmt,
+    io::{ErrorKind, Read},
+    path::Path,
+    time::Duration,
+};
 
 const TRANSCRIPTIONS_ENDPOINT: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
+const MAX_SUCCESS_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_ERROR_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_TRANSCRIPT_BYTES: usize = 64 * 1024;
+const MAX_ERROR_MESSAGE_CHARACTERS: usize = 80;
 const NORMAL_STYLE_EXEMPLAR: &str = "The following is a professional transcript with proper capitalization, punctuation, and complete sentences. The meeting starts at 3pm, the budget is $12,500, and we are in room 204.";
 const LOWER_CASE_STYLE_EXEMPLAR: &str = "here's a casual transcript with no capitalization and relaxed punctuation just lowercase text. i'll grab 2 coffees and meet you at 5";
 
@@ -91,21 +101,52 @@ impl GroqClient {
 
 fn decode_response(response: Response) -> Result<String, GroqError> {
     let status = response.status();
-    let body = response
-        .text()
-        .map_err(|error| GroqError::Network(network_failure(&error)))?;
+    let maximum_body_size = if status.is_success() {
+        MAX_SUCCESS_RESPONSE_BYTES
+    } else {
+        MAX_ERROR_RESPONSE_BYTES
+    };
+    let body = read_response_body(response, maximum_body_size)?;
     if !status.is_success() {
         return Err(GroqError::Http {
             status,
             message: groq_error_message(&body),
         });
     }
-    serde_json::from_str::<TranscriptionResponse>(&body)
-        .map(|response| response.text.trim().into())
-        .map_err(|_| GroqError::UnreadableResponse)
+    let response = serde_json::from_slice::<TranscriptionResponse>(&body)
+        .map_err(|_| GroqError::UnreadableResponse)?;
+    if response.text.len() > MAX_TRANSCRIPT_BYTES {
+        return Err(GroqError::ResponseTooLarge);
+    }
+    Ok(response.text.trim().into())
 }
 
-fn groq_error_message(body: &str) -> Option<String> {
+fn read_response_body(mut response: Response, maximum_size: usize) -> Result<Vec<u8>, GroqError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > maximum_size as u64)
+    {
+        return Err(GroqError::ResponseTooLarge);
+    }
+
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .unwrap_or_default()
+            .min(maximum_size as u64) as usize,
+    );
+    response
+        .by_ref()
+        .take(maximum_size as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|error| GroqError::Network(read_failure(&error)))?;
+    if body.len() > maximum_size {
+        return Err(GroqError::ResponseTooLarge);
+    }
+    Ok(body)
+}
+
+fn groq_error_message(body: &[u8]) -> Option<String> {
     #[derive(Deserialize)]
     struct ErrorResponse {
         error: ErrorBody,
@@ -116,11 +157,12 @@ fn groq_error_message(body: &str) -> Option<String> {
         message: String,
     }
 
-    serde_json::from_str::<ErrorResponse>(body)
+    serde_json::from_slice::<ErrorResponse>(body)
         .ok()
         .and_then(|response| {
             let message = response.error.message.trim();
-            (!message.is_empty()).then(|| message.chars().take(80).collect())
+            (!message.is_empty())
+                .then(|| message.chars().take(MAX_ERROR_MESSAGE_CHARACTERS).collect())
         })
 }
 
@@ -161,6 +203,14 @@ fn network_failure(error: &reqwest::Error) -> NetworkFailure {
     }
 }
 
+fn read_failure(error: &std::io::Error) -> NetworkFailure {
+    if error.kind() == ErrorKind::TimedOut {
+        NetworkFailure::Timeout
+    } else {
+        NetworkFailure::Other
+    }
+}
+
 fn transcription_prompt(vocabulary: &str, style: &Style) -> String {
     let exemplar = match style {
         Style::Normal => NORMAL_STYLE_EXEMPLAR,
@@ -190,6 +240,7 @@ pub enum GroqError {
         status: StatusCode,
         message: Option<String>,
     },
+    ResponseTooLarge,
     UnreadableResponse,
 }
 
@@ -231,6 +282,7 @@ impl fmt::Display for GroqError {
             Self::Http { status, .. } => {
                 return write!(formatter, "Groq request failed (HTTP {})", status.as_u16());
             }
+            Self::ResponseTooLarge => "Response from Groq was too large",
             Self::UnreadableResponse => "Unreadable response from Groq",
         })
     }
@@ -384,6 +436,44 @@ mod tests {
             .expect_err("malformed response is rejected");
 
         assert_eq!(error.to_string(), "Unreadable response from Groq");
+    }
+
+    #[test]
+    fn oversized_responses_are_rejected_before_they_are_buffered() {
+        let server = MockServer::start(vec![MockResponse::status_owned(
+            200,
+            format!(
+                "{{\"text\":\"{}\"}}",
+                "a".repeat(MAX_SUCCESS_RESPONSE_BYTES)
+            ),
+        )]);
+        let wav = TestWav::create();
+
+        let error = server
+            .client()
+            .transcribe(TEST_KEY, wav.path(), &Settings::default())
+            .expect_err("oversized response is rejected");
+
+        assert_eq!(error.to_string(), "Response from Groq was too large");
+    }
+
+    #[test]
+    fn oversized_streamed_responses_are_rejected_at_the_byte_cap() {
+        let server = MockServer::start(vec![MockResponse::status_without_length_owned(
+            200,
+            format!(
+                "{{\"text\":\"{}\"}}",
+                "a".repeat(MAX_SUCCESS_RESPONSE_BYTES)
+            ),
+        )]);
+        let wav = TestWav::create();
+
+        let error = server
+            .client()
+            .transcribe(TEST_KEY, wav.path(), &Settings::default())
+            .expect_err("oversized streamed response is rejected");
+
+        assert_eq!(error.to_string(), "Response from Groq was too large");
     }
 
     #[test]
@@ -548,40 +638,63 @@ mod tests {
 
     struct MockResponse {
         status: Option<u16>,
-        body: &'static str,
+        body: String,
         delay: Duration,
+        content_length: bool,
     }
 
     impl MockResponse {
-        fn json(body: &'static str) -> Self {
+        fn json(body: &str) -> Self {
             Self {
                 status: Some(200),
-                body,
+                body: body.into(),
                 delay: Duration::ZERO,
+                content_length: true,
             }
         }
 
-        fn status(status: u16, body: &'static str) -> Self {
+        fn status(status: u16, body: &str) -> Self {
+            Self {
+                status: Some(status),
+                body: body.into(),
+                delay: Duration::ZERO,
+                content_length: true,
+            }
+        }
+
+        fn status_owned(status: u16, body: String) -> Self {
             Self {
                 status: Some(status),
                 body,
                 delay: Duration::ZERO,
+                content_length: true,
             }
         }
 
-        fn status_after(status: u16, body: &'static str, delay: Duration) -> Self {
+        fn status_without_length_owned(status: u16, body: String) -> Self {
             Self {
                 status: Some(status),
                 body,
+                delay: Duration::ZERO,
+                content_length: false,
+            }
+        }
+
+        fn status_after(status: u16, body: &str, delay: Duration) -> Self {
+            Self {
+                status: Some(status),
+                body: body.into(),
                 delay,
+                content_length: true,
             }
         }
 
         fn connection_failure() -> Self {
             Self {
                 status: None,
-                body: "",
+                body: String::new(),
                 delay: Duration::ZERO,
+                content_length: true,
             }
         }
 
@@ -590,12 +703,14 @@ mod tests {
                 return;
             };
             thread::sleep(self.delay);
+            let content_length = self
+                .content_length
+                .then(|| format!("Content-Length: {}\r\n", self.body.len()))
+                .unwrap_or_default();
             let _ = write!(
                 stream,
-                "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-                status,
-                self.body.len(),
-                self.body
+                "HTTP/1.1 {} Test\r\n{}Content-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                status, content_length, self.body
             );
         }
     }

@@ -3,6 +3,7 @@ use std::{
     env, fmt,
     fs::{self, File, OpenOptions},
     io::{self, Write},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -303,10 +304,15 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn for_current_user() -> Result<Self, SettingsError> {
-        Ok(Self::at(settings_path_for(
+        let path = settings_path_for(
             env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             env::var_os("HOME").map(PathBuf::from),
-        )?))
+        )?;
+        ensure_private_settings_storage(&path).map_err(|source| SettingsError::Write {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(Self::at(path))
     }
 
     pub fn at(path: PathBuf) -> Self {
@@ -421,12 +427,14 @@ fn write_atomically_after_sync(
         )
     })?;
     fs::create_dir_all(directory)?;
+    repair_file_permissions(path)?;
 
     let temporary_path = temporary_path(path);
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
+            .mode(0o600)
             .open(&temporary_path)?;
         file.write_all(contents)?;
         file.sync_all()?;
@@ -439,6 +447,30 @@ fn write_atomically_after_sync(
         let _ = fs::remove_file(&temporary_path);
     }
     result
+}
+
+fn ensure_private_settings_storage(path: &Path) -> io::Result<()> {
+    let directory = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "settings path does not have a parent directory",
+        )
+    })?;
+    ensure_private_directory(directory)?;
+    repair_file_permissions(path)
+}
+
+fn ensure_private_directory(directory: &Path) -> io::Result<()> {
+    fs::create_dir_all(directory)?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+}
+
+fn repair_file_permissions(path: &Path) -> io::Result<()> {
+    match fs::metadata(path) {
+        Ok(_) => fs::set_permissions(path, fs::Permissions::from_mode(0o600)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
@@ -631,6 +663,48 @@ mod tests {
 
         fs::remove_dir_all(path.parent().expect("settings parent directory"))
             .expect("test settings directory removal succeeds");
+    }
+
+    #[test]
+    fn settings_storage_and_atomic_writes_are_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = temporary_settings_path();
+        let directory = path.parent().expect("settings path has a parent");
+        ensure_private_settings_storage(&path).expect("private settings storage is created");
+        assert_eq!(
+            fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
+        let temporary_mode = std::cell::Cell::new(0);
+        write_atomically_after_sync(&path, b"{}", |temporary_path| {
+            temporary_mode.set(
+                fs::metadata(temporary_path)
+                    .expect("temporary settings file exists")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+            );
+            Ok(())
+        })
+        .expect("settings are saved atomically");
+
+        assert_eq!(temporary_mode.get(), 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("simulates a legacy installation");
+        ensure_private_settings_storage(&path).expect("legacy permissions are repaired");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        fs::remove_dir_all(directory).expect("test settings directory removal succeeds");
     }
 
     #[test]
