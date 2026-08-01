@@ -93,7 +93,3 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/echo/settings.json
 
 The Groq API key is stored through the desktop Secret Service rather than in
 the settings file.
-
-## License
-
-Echo for Linux is available under the [MIT License](LICENSE).
