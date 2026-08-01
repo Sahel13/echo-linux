@@ -8,6 +8,10 @@ Echo is a minimal desktop dictation app. Hold a shortcut, speak, release it, and
 Echo transcribes the recording and pastes the result into the focused text
 field.
 
+Echo uses a [Groq API key](https://console.groq.com/keys) for transcription.
+Sign in to [Groq](https://console.groq.com/login) to create or manage your API
+key, then enter it in Echo’s settings.
+
 This repository is the Linux port of the [macOS Echo
 app](https://github.com/sabeelash/Echo). It is a
 native Rust/GTK application designed for X11 desktop sessions.
@@ -26,7 +30,7 @@ ln -s ~/Downloads/echo-linux-x86_64-0.1.0/echo ~/.local/bin  # if `~/.local/bin`
 ## Usage
 
 1. Start Echo from an X11 desktop session.
-2. Open the settings window and enter a Groq API key.
+2. Open the settings window and enter a [Groq API key](https://console.groq.com/keys).
 3. Focus an editable text field.
 4. Hold the configured shortcut (F10 by default) and speak.
 5. Release the shortcut to transcribe and paste the result.
@@ -93,5 +97,5 @@ Echo stores its settings at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/echo/settings.json
 ```
 
-The Groq API key is stored through the desktop Secret Service rather than in
+The [Groq](https://console.groq.com/login) API key is stored through the desktop Secret Service rather than in
 the settings file.
