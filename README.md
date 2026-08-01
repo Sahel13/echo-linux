@@ -23,6 +23,18 @@ tar xzf echo-linux-x86_64-0.1.0.tar.gz
 ln -s ~/Downloads/echo-linux-x86_64-0.1.0/echo ~/.local/bin  # if `~/.local/bin` is in PATH
 ```
 
+## Usage
+
+1. Start Echo from an X11 desktop session.
+2. Open the settings window and enter a Groq API key.
+3. Focus an editable text field.
+4. Hold the configured shortcut (F10 by default) and speak.
+5. Release the shortcut to transcribe and paste the result.
+
+Press Escape while recording to cancel. Settings also include the shortcut,
+Whisper model, language, transcription style, custom vocabulary, microphone,
+and last-transcript controls.
+
 ## Status and requirements
 
 The Linux port currently supports:
@@ -34,6 +46,11 @@ The Linux port currently supports:
 - A Secret Service implementation for securely storing the Groq API key.
 - Groq Whisper transcription using `whisper-large-v3-turbo` or
   `whisper-large-v3`.
+
+Echo requires an X11 session, but does not require a desktop environment or
+compositor to launch. A compositor such as
+[`picom`](https://wiki.archlinux.org/title/Picom) is recommended for the
+recording overlay’s transparent, rounded appearance.
 
 On Ubuntu 22.04, install the build dependencies with:
 
@@ -67,21 +84,6 @@ To create an x86-64 release archive and checksum:
 ```sh
 ./packaging/build-release.sh
 ```
-
-The archive is written to `dist/`. See [`packaging/README.txt`](packaging/README.txt)
-for installation and runtime dependency details.
-
-## Use Echo
-
-1. Start Echo from an X11 desktop session.
-2. Open the settings window and enter a Groq API key.
-3. Focus an editable text field.
-4. Hold the configured shortcut (F10 by default) and speak.
-5. Release the shortcut to transcribe and paste the result.
-
-Press Escape while recording to cancel. Settings also include the shortcut,
-Whisper model, language, transcription style, custom vocabulary, microphone,
-and last-transcript controls.
 
 ## Configuration and data
 

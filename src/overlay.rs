@@ -13,9 +13,9 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-const WIDTH: i32 = 260;
-const HEIGHT: i32 = 64;
-const BOTTOM_MARGIN: i32 = 48;
+const WIDTH: i32 = 480;
+const HEIGHT: i32 = 48;
+const BOTTOM_MARGIN: i32 = 120;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum Mode {
@@ -29,7 +29,8 @@ enum Mode {
 #[derive(Clone)]
 pub struct Overlay {
     window: gtk::Window,
-    indicator: gtk::Label,
+    recording_logo: gtk::Image,
+    transcribing_logo: gtk::Image,
     message: gtk::Label,
     mode: Rc<Cell<Mode>>,
 }
@@ -38,19 +39,23 @@ impl Overlay {
     pub fn new(application: &adw::Application) -> Self {
         install_css();
 
-        let indicator = gtk::Label::new(Some("●"));
-        indicator.add_css_class("echo-overlay-indicator");
+        let recording_logo = logo_image(include_bytes!("../assets/echo-app-mark.svg"));
+        let transcribing_logo = logo_image(include_bytes!("../assets/echo-app-mark-white.svg"));
 
         let message = gtk::Label::new(None);
         message.add_css_class("echo-overlay-message");
         message.set_ellipsize(gtk::pango::EllipsizeMode::End);
         message.set_max_width_chars(42);
+        message.set_visible(false);
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         content.add_css_class("echo-overlay");
+        content.set_hexpand(true);
+        content.set_vexpand(true);
         content.set_halign(gtk::Align::Center);
         content.set_valign(gtk::Align::Center);
-        content.append(&indicator);
+        content.append(&recording_logo);
+        content.append(&transcribing_logo);
         content.append(&message);
 
         let window = gtk::Window::builder()
@@ -82,11 +87,14 @@ impl Overlay {
         let mode = Rc::new(Cell::new(Mode::Hidden));
         let pulse_phase = Rc::new(Cell::new(0_u8));
         glib::timeout_add_local(Duration::from_millis(175), {
-            let indicator = indicator.clone();
+            let recording_logo = recording_logo.clone();
+            let transcribing_logo = transcribing_logo.clone();
             let mode = mode.clone();
             move || {
                 let phase = pulse_phase.get();
-                indicator.set_opacity(pulse_opacity(mode.get(), phase));
+                let opacity = pulse_opacity(mode.get(), phase);
+                recording_logo.set_opacity(opacity);
+                transcribing_logo.set_opacity(opacity);
                 pulse_phase.set((phase + 1) % 4);
                 glib::ControlFlow::Continue
             }
@@ -94,18 +102,19 @@ impl Overlay {
 
         Self {
             window,
-            indicator,
+            recording_logo,
+            transcribing_logo,
             message,
             mode,
         }
     }
 
     pub fn show_recording(&self) {
-        self.set_mode(Mode::Recording, "Recording…");
+        self.set_mode(Mode::Recording, "");
     }
 
     pub fn show_transcribing(&self) {
-        self.set_mode(Mode::Transcribing, "Transcribing…");
+        self.set_mode(Mode::Transcribing, "");
     }
 
     pub fn show_error(&self, message: &str) {
@@ -120,15 +129,10 @@ impl Overlay {
     fn set_mode(&self, mode: Mode, message: &str) {
         self.mode.set(mode);
         self.message.set_text(message);
-        self.indicator
-            .set_visible(matches!(mode, Mode::Recording | Mode::Transcribing));
-        self.indicator.remove_css_class("recording");
-        self.indicator.remove_css_class("transcribing");
-        match mode {
-            Mode::Recording => self.indicator.add_css_class("recording"),
-            Mode::Transcribing => self.indicator.add_css_class("transcribing"),
-            Mode::Hidden | Mode::Error => {}
-        }
+        self.recording_logo.set_visible(mode == Mode::Recording);
+        self.transcribing_logo
+            .set_visible(mode == Mode::Transcribing);
+        self.message.set_visible(mode == Mode::Error);
         // set_visible maps the already-realized non-focusable window without
         // issuing the activation request that present() would send.
         self.window.set_visible(true);
@@ -215,6 +219,16 @@ fn rectangle_contains(rectangle: &gdk::Rectangle, x: i32, y: i32) -> bool {
         && y < rectangle.y() + rectangle.height()
 }
 
+fn logo_image(bytes: &'static [u8]) -> gtk::Image {
+    let image = gtk::Image::new();
+    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
+        image.set_paintable(Some(&texture));
+    }
+    image.set_pixel_size(18);
+    image.set_visible(false);
+    image
+}
+
 fn pulse_opacity(mode: Mode, phase: u8) -> f64 {
     match mode {
         // Recording changes every 350 ms; transcribing changes every 175 ms.
@@ -232,14 +246,12 @@ fn install_css() {
         "
         window.echo-overlay-window { background: transparent; }
         .echo-overlay {
-            background: alpha(#202124, 0.92);
-            border-radius: 18px;
-            padding: 12px 18px;
+            background: alpha(#202124, 0.78);
+            border: 1px solid alpha(white, 0.12);
+            border-radius: 999px;
+            padding: 12px 16px;
             color: white;
         }
-        .echo-overlay-indicator { font-size: 22px; }
-        .echo-overlay-indicator.recording { color: #ff4d4f; }
-        .echo-overlay-indicator.transcribing { color: #e8eaed; }
         .echo-overlay-message { font-weight: 600; }
         ",
     );

@@ -6,5 +6,5 @@
     </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="224" fill="url(#background)"/>
-  <image x="120" y="384" width="784" height="395" xlink:href="echo-app-mark.svg" href="echo-app-mark.svg"/>
+  <image x="120" y="314.5" width="784" height="395" xlink:href="echo-app-mark.svg" href="echo-app-mark.svg"/>
 </svg>
